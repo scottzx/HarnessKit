@@ -434,8 +434,6 @@ export default function OverviewPage() {
     return <OverviewSkeleton />;
   }
 
-  const hasAuditData = auditResults.length > 0;
-
   return (
     <div className="space-y-6 pb-4" aria-live="polite">
       {/* ----------------------------------------------------------------- */}
@@ -672,9 +670,9 @@ export default function OverviewPage() {
       )}
 
       {/* ----------------------------------------------------------------- */}
-      {/* First-run welcome — when no extensions and no audit               */}
+      {/* First-run welcome — when no extensions and no audit (commented out) */}
       {/* ----------------------------------------------------------------- */}
-      {stats.total_extensions === 0 && !hasAuditData && (
+      {/* {stats.total_extensions === 0 && !hasAuditData && (
         <section className="space-y-5">
           <h3 className="font-serif text-xl font-semibold tracking-tight text-foreground">
             {t("firstRun.title")}
@@ -726,7 +724,7 @@ export default function OverviewPage() {
             ))}
           </div>
         </section>
-      )}
+      )} */}
 
       {/* ----------------------------------------------------------------- */}
       {/* Empty state — when no extensions at all                           */}

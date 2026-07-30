@@ -6,8 +6,6 @@ import path from "path";
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(({ mode }) => {
-  const embed = mode === "embed";
-
   return {
     plugins: [react(), tailwindcss()],
     define: {
@@ -39,44 +37,26 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
-    build: embed
-      ? {
-          outDir:
-            process.env.HARNESSKIT_EMBED_OUT_DIR ||
-            path.resolve(__dirname, "../../frontend/dist/embed"),
-          emptyOutDir: false,
-          sourcemap: true,
-          lib: {
-            entry: path.resolve(__dirname, "src/embed.tsx"),
-            formats: ["es"],
-            fileName: () => "harnesskit-embed.js",
-          },
-          rollupOptions: {
-            output: {
-              inlineDynamicImports: true,
-            },
-          },
-        }
-      : {
-          rollupOptions: {
-            output: {
-              manualChunks: {
-                "vendor-react": ["react", "react-dom", "react-router-dom"],
-                "vendor-ui": [
-                  "lucide-react",
-                  "@tanstack/react-table",
-                  "@dnd-kit/core",
-                  "@dnd-kit/sortable",
-                ],
-                "vendor-tauri": [
-                  "@tauri-apps/api",
-                  "@tauri-apps/plugin-dialog",
-                  "@tauri-apps/plugin-opener",
-                ],
-                "vendor-utils": ["zustand", "clsx"],
-              },
-            },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            "vendor-react": ["react", "react-dom", "react-router-dom"],
+            "vendor-ui": [
+              "lucide-react",
+              "@tanstack/react-table",
+              "@dnd-kit/core",
+              "@dnd-kit/sortable",
+            ],
+            "vendor-tauri": [
+              "@tauri-apps/api",
+              "@tauri-apps/plugin-dialog",
+              "@tauri-apps/plugin-opener",
+            ],
+            "vendor-utils": ["zustand", "clsx"],
           },
         },
+      },
+    },
   };
 });

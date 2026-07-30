@@ -6,7 +6,7 @@ import { AppShell } from "./components/layout/app-shell";
 import { UpdateDialog } from "./components/layout/update-dialog";
 import { WebUpdateDialog } from "./components/layout/web-update-dialog";
 import { Confetti } from "./components/onboarding/confetti";
-import { Onboarding, useOnboarding } from "./components/onboarding/onboarding";
+import { useOnboarding } from "./components/onboarding/onboarding";
 import { ErrorBoundary } from "./components/shared/error-boundary";
 import { api } from "./lib/invoke";
 import { isDesktop } from "./lib/transport";
@@ -32,9 +32,8 @@ export default function App() {
   const mode = useUIStore((s) => s.mode);
   const fetchExtensions = useExtensionStore((s) => s.fetch);
   const loadCachedAudit = useAuditStore((s) => s.loadCached);
-  const { show: showOnboarding, complete: completeOnboarding } =
-    useOnboarding();
-  const [showConfetti, setShowConfetti] = useState(false);
+  const { show: showOnboarding } = useOnboarding();
+  const [showConfetti] = useState(false);
   const lastScanRef = useRef(0);
   const appIcon = useUIStore((s) => s.appIcon);
   const agents = useAgentStore((s) => s.agents);
@@ -170,6 +169,7 @@ export default function App() {
     }
   }, [appIcon]);
 
+  /*
   if (showOnboarding) {
     return (
       <Onboarding
@@ -181,6 +181,7 @@ export default function App() {
       />
     );
   }
+  */
 
   return (
     <>
