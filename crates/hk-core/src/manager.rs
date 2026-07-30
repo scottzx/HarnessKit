@@ -62,7 +62,7 @@ impl Manager {
     }
 }
 
-/// Toggle an extension's enabled state. Handles all 5 kinds:
+/// Toggle an extension's enabled state.
 /// Skill (file rename), MCP (config read/write), Hook (config read/write),
 /// Plugin (Claude config-driven or non-Claude manifest rename), CLI (cascade to children).
 pub fn toggle_extension(store: &Store, id: &str, enabled: bool) -> Result<(), HkError> {
@@ -123,6 +123,55 @@ pub fn toggle_extension_with_adapters(
             // Child skills/MCPs are toggled independently by the frontend.
             store.set_enabled(id, enabled)?;
         }
+        ExtensionKind::Subagent | ExtensionKind::Command => {
+            toggle_managed_file(&ext, enabled, store)?;
+            store.set_enabled(id, enabled)?;
+        }
+    }
+    Ok(())
+}
+
+fn toggle_managed_file(ext: &Extension, enabled: bool, store: &Store) -> Result<(), HkError> {
+    let original = ext
+        .source_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| HkError::NotFound(format!("{} has no source path", ext.name)))?;
+    if enabled {
+        let disabled = store
+            .get_disabled_config(&ext.id)?
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            .and_then(|value| {
+                value
+                    .get("disabled_path")
+                    .and_then(|value| value.as_str())
+                    .map(PathBuf::from)
+            })
+            .unwrap_or_else(|| PathBuf::from(format!("{}.disabled", original.display())));
+        if disabled.exists() {
+            if let Some(parent) = original.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(&disabled, &original)?;
+        }
+        store.set_disabled_config(&ext.id, None)?;
+    } else {
+        if !original.exists() {
+            return Err(HkError::NotFound(format!(
+                "{} source file is missing",
+                ext.name
+            )));
+        }
+        let disabled = PathBuf::from(format!("{}.disabled", original.display()));
+        if disabled.exists() {
+            return Err(HkError::Conflict(format!(
+                "Disabled target already exists: {}",
+                disabled.display()
+            )));
+        }
+        std::fs::rename(&original, &disabled)?;
+        let saved = serde_json::json!({ "disabled_path": disabled.to_string_lossy() });
+        store.set_disabled_config(&ext.id, Some(&saved.to_string()))?;
     }
     Ok(())
 }
@@ -2801,5 +2850,50 @@ mod tests {
         let p3 = store.get_extension(&project_id).unwrap().unwrap();
         assert!(g3.enabled);
         assert!(!p3.enabled);
+    }
+
+    #[test]
+    fn command_toggle_renames_single_file_reversibly() {
+        let dir = TempDir::new().unwrap();
+        let store = crate::store::Store::open(&dir.path().join("test.db")).unwrap();
+        let command_path = dir.path().join("commands/check.md");
+        std::fs::create_dir_all(command_path.parent().unwrap()).unwrap();
+        std::fs::write(&command_path, "Check this change.").unwrap();
+        let ext = Extension {
+            id: "command-check".into(),
+            kind: ExtensionKind::Command,
+            name: "check".into(),
+            description: String::new(),
+            source: Source {
+                origin: SourceOrigin::Agent,
+                url: None,
+                version: None,
+                commit_hash: None,
+                from_manifest: false,
+            },
+            agents: vec!["grok".into()],
+            tags: vec![],
+            pack: None,
+            permissions: vec![],
+            enabled: true,
+            trust_score: None,
+            installed_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            source_path: Some(command_path.to_string_lossy().to_string()),
+            cli_parent_id: None,
+            cli_meta: None,
+            install_meta: None,
+            scope: ConfigScope::Global,
+        };
+        store.insert_extension(&ext).unwrap();
+
+        toggle_extension_with_adapters(&store, &[], &ext.id, false).unwrap();
+        assert!(!command_path.exists());
+        assert!(std::path::Path::new(&format!("{}.disabled", command_path.display())).exists());
+        assert!(!store.get_extension(&ext.id).unwrap().unwrap().enabled);
+
+        toggle_extension_with_adapters(&store, &[], &ext.id, true).unwrap();
+        assert!(command_path.exists());
+        assert!(store.get_extension(&ext.id).unwrap().unwrap().enabled);
     }
 }

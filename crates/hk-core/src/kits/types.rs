@@ -11,6 +11,10 @@ pub struct KindCounts {
     pub plugin: usize,
     pub hook: usize,
     pub cli: usize,
+    #[serde(default)]
+    pub subagent: usize,
+    #[serde(default)]
+    pub command: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,4 +183,3 @@ pub struct ProjectInstallRecords {
     pub project_path: String,
     pub entries: Vec<ProjectKitInstallEntry>,
 }
-

@@ -936,7 +936,114 @@ pub fn scan_adapter(adapter: &dyn crate::adapter::AgentAdapter) -> Vec<Extension
     all.extend(scan_mcp_servers(adapter));
     all.extend(scan_hooks(adapter));
     all.extend(scan_plugins(adapter));
+    all.extend(scan_managed_files(
+        adapter.global_subagent_extension_files(),
+        adapter.name(),
+        ExtensionKind::Subagent,
+        ConfigScope::Global,
+    ));
+    all.extend(scan_managed_files(
+        adapter.global_command_files(),
+        adapter.name(),
+        ExtensionKind::Command,
+        ConfigScope::Global,
+    ));
     all
+}
+
+/// Scan file-backed extension kinds whose native representation is one file.
+///
+/// Identity deliberately keys on the normalized native path rather than the
+/// parsed display name: editing frontmatter/content preserves the observation
+/// ID, while moving the file creates a new observation.
+fn scan_managed_files(
+    paths: Vec<std::path::PathBuf>,
+    agent: &str,
+    kind: ExtensionKind,
+    scope: ConfigScope,
+) -> Vec<Extension> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = std::fs::metadata(&path).ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let disabled = path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".disabled"));
+            let logical_path = if disabled {
+                PathBuf::from(path.to_string_lossy().trim_end_matches(".disabled"))
+            } else {
+                path.clone()
+            };
+            let name = logical_path
+                .file_stem()
+                .map(|value| value.to_string_lossy().to_string())?;
+            let description = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|content| frontmatter_description(&content))
+                .unwrap_or_default();
+            let normalized_path = canonical_native_path(&logical_path)
+                .to_string_lossy()
+                .to_string();
+            let id = stable_id_with_scope(&normalized_path, kind.as_str(), agent, &scope);
+            let installed_at = metadata
+                .created()
+                .map(DateTime::<Utc>::from)
+                .unwrap_or_else(|_| Utc::now());
+            let updated_at = metadata
+                .modified()
+                .map(DateTime::<Utc>::from)
+                .unwrap_or(installed_at);
+            Some(Extension {
+                id,
+                kind,
+                name,
+                description,
+                source: Source {
+                    origin: SourceOrigin::Agent,
+                    url: None,
+                    version: None,
+                    commit_hash: None,
+                    from_manifest: false,
+                },
+                agents: vec![agent.to_string()],
+                tags: vec![],
+                pack: None,
+                permissions: vec![],
+                enabled: !disabled,
+                trust_score: None,
+                installed_at,
+                updated_at,
+                source_path: Some(logical_path.to_string_lossy().to_string()),
+                cli_parent_id: None,
+                cli_meta: None,
+                install_meta: None,
+                scope: scope.clone(),
+            })
+        })
+        .collect()
+}
+
+fn canonical_native_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .and_then(|parent| path.file_name().map(|name| parent.join(name)))
+            .unwrap_or_else(|| path.to_path_buf())
+    })
+}
+
+fn frontmatter_description(content: &str) -> Option<String> {
+    let rest = content.strip_prefix("---")?;
+    let end = rest.find("\n---")?;
+    let frontmatter = &rest[..end];
+    let value: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+    value
+        .get("description")
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::to_string)
 }
 
 /// Scan only skills for a specific adapter.
@@ -1098,6 +1205,36 @@ pub fn scan_project_extensions(
         }
     }
 
+    for pattern in adapter.project_subagent_extension_patterns() {
+        all.extend(scan_managed_files(
+            resolve_pattern(project_path, &pattern),
+            adapter.name(),
+            ExtensionKind::Subagent,
+            scope.clone(),
+        ));
+        all.extend(scan_managed_files(
+            resolve_pattern(project_path, &format!("{pattern}.disabled")),
+            adapter.name(),
+            ExtensionKind::Subagent,
+            scope.clone(),
+        ));
+    }
+
+    for pattern in adapter.project_command_patterns() {
+        all.extend(scan_managed_files(
+            resolve_pattern(project_path, &pattern),
+            adapter.name(),
+            ExtensionKind::Command,
+            scope.clone(),
+        ));
+        all.extend(scan_managed_files(
+            resolve_pattern(project_path, &format!("{pattern}.disabled")),
+            adapter.name(),
+            ExtensionKind::Command,
+            scope.clone(),
+        ));
+    }
+
     all
 }
 
@@ -1120,6 +1257,18 @@ pub fn scan_all(
         all.extend(scan_mcp_servers(adapter.as_ref()));
         all.extend(scan_hooks(adapter.as_ref()));
         all.extend(scan_plugins(adapter.as_ref()));
+        all.extend(scan_managed_files(
+            adapter.global_subagent_extension_files(),
+            adapter.name(),
+            ExtensionKind::Subagent,
+            ConfigScope::Global,
+        ));
+        all.extend(scan_managed_files(
+            adapter.global_command_files(),
+            adapter.name(),
+            ExtensionKind::Command,
+            ConfigScope::Global,
+        ));
 
         // Project-scoped extensions for every known project
         for (project_name, project_path) in projects {
@@ -2585,8 +2734,8 @@ mod tests {
         // exception list explicitly.
         let adapters = crate::adapter::all_adapters();
         for a in &adapters {
-            if a.name() == "hermes" {
-                // global-only: no on-disk project convention (hermes-agent#4667)
+            if matches!(a.name(), "hermes" | "openclaw" | "grok") {
+                // Verified global-only adapters have no project convention.
                 continue;
             }
             assert!(
@@ -3316,5 +3465,67 @@ mod config_tests {
             .iter()
             .any(|p| matches!(p, Permission::FileSystem { paths } if !paths.is_empty()));
         assert!(has_fs, "Should detect macOS /Library/ paths");
+    }
+
+    #[test]
+    fn grok_subagent_and_command_are_first_class_extensions_with_path_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join(".grok");
+        std::fs::create_dir_all(base.join("agents")).unwrap();
+        std::fs::create_dir_all(base.join("commands")).unwrap();
+        let agent_path = base.join("agents/reviewer.md");
+        let command_path = base.join("commands/check.md");
+        std::fs::write(
+            &agent_path,
+            "---\ndescription: Reviews changes\n---\nReview carefully.",
+        )
+        .unwrap();
+        std::fs::write(&command_path, "Check the current change.").unwrap();
+
+        let adapter =
+            crate::adapter::grok::GrokAdapter::with_home(tmp.path().to_path_buf());
+        let first = scan_adapter(&adapter);
+        let subagent = first
+            .iter()
+            .find(|extension| extension.kind == ExtensionKind::Subagent)
+            .unwrap();
+        let command = first
+            .iter()
+            .find(|extension| extension.kind == ExtensionKind::Command)
+            .unwrap();
+        assert_eq!(subagent.name, "reviewer");
+        assert_eq!(subagent.description, "Reviews changes");
+        assert_eq!(command.name, "check");
+        let subagent_id = subagent.id.clone();
+
+        std::fs::write(
+            &agent_path,
+            "---\ndescription: Updated description\n---\nChanged body.",
+        )
+        .unwrap();
+        let second = scan_adapter(&adapter);
+        assert_eq!(
+            second
+                .iter()
+                .find(|extension| extension.kind == ExtensionKind::Subagent)
+                .unwrap()
+                .id,
+            subagent_id,
+            "content edits must preserve native-path observation identity"
+        );
+
+        let disabled_path = PathBuf::from(format!("{}.disabled", agent_path.display()));
+        std::fs::rename(&agent_path, &disabled_path).unwrap();
+        let disabled_scan = scan_adapter(&adapter);
+        let disabled = disabled_scan
+            .iter()
+            .find(|extension| extension.kind == ExtensionKind::Subagent)
+            .unwrap();
+        assert_eq!(disabled.id, subagent_id);
+        assert!(!disabled.enabled);
+        assert_eq!(
+            disabled.source_path.as_deref(),
+            Some(agent_path.to_str().unwrap())
+        );
     }
 }

@@ -146,6 +146,18 @@ impl AgentAdapter for CodexAdapter {
         super::files_with_ext(&self.base_dir().join("agents"), "toml").collect()
     }
 
+    fn global_command_files(&self) -> Vec<PathBuf> {
+        // Codex custom prompts are invoked as `/prompts:<name>`.
+        super::managed_files_with_ext(&self.base_dir().join("prompts"), "md").collect()
+    }
+
+    fn command_dir_for(&self, scope: &crate::models::ConfigScope) -> Option<PathBuf> {
+        match scope {
+            crate::models::ConfigScope::Global => Some(self.base_dir().join("prompts")),
+            crate::models::ConfigScope::Project { .. } => None,
+        }
+    }
+
     fn global_memory_files(&self) -> Vec<PathBuf> {
         // ~/.codex/memories/*.md — explicit `is_file()` preserves prior
         // semantics (rejects a hypothetical directory whose name ends in

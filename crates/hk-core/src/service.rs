@@ -561,6 +561,22 @@ pub fn audit_extensions(
                 Default::default(),
                 ext.name.clone(),
             ),
+            ExtensionKind::Subagent | ExtensionKind::Command => {
+                let file_path = ext.source_path.clone().unwrap_or_else(|| ext.name.clone());
+                let live_path = if std::path::Path::new(&file_path).exists() {
+                    std::path::PathBuf::from(&file_path)
+                } else {
+                    std::path::PathBuf::from(format!("{file_path}.disabled"))
+                };
+                let content = std::fs::read_to_string(&live_path).unwrap_or_default();
+                (
+                    content,
+                    None,
+                    vec![],
+                    Default::default(),
+                    live_path.to_string_lossy().to_string(),
+                )
+            }
         };
 
         let input = AuditInput {
@@ -1024,6 +1040,17 @@ pub fn delete_extension(
                 }
             }
         }
+        ExtensionKind::Subagent | ExtensionKind::Command => {
+            if let Some(path) = ext.source_path.as_deref() {
+                let original = std::path::PathBuf::from(path);
+                let disabled = std::path::PathBuf::from(format!("{path}.disabled"));
+                if original.exists() {
+                    std::fs::remove_file(original)?;
+                } else if disabled.exists() {
+                    std::fs::remove_file(disabled)?;
+                }
+            }
+        }
     }
 
     // Phase 3: DB delete, only after disk side succeeded. Cascade to any
@@ -1240,6 +1267,22 @@ pub fn get_extension_content(
             path: None,
             symlink_target: None,
         }),
+        ExtensionKind::Subagent | ExtensionKind::Command => {
+            let path = ext
+                .source_path
+                .ok_or_else(|| HkError::NotFound("Extension source path missing".into()))?;
+            let live_path = if std::path::Path::new(&path).exists() {
+                std::path::PathBuf::from(&path)
+            } else {
+                std::path::PathBuf::from(format!("{path}.disabled"))
+            };
+            let content = std::fs::read_to_string(&live_path)?;
+            Ok(ExtensionContent {
+                content,
+                path: Some(live_path.to_string_lossy().to_string()),
+                symlink_target: None,
+            })
+        }
     }
 }
 
@@ -1326,6 +1369,11 @@ pub fn install_to_agent(
             Ok(deployed_name)
         }
         ExtensionKind::Mcp => {
+            if !target_adapter.supports_mcp() {
+                return Err(HkError::Validation(format!(
+                    "{target_agent} MCP support is unavailable because its native capability has not been verified"
+                )));
+            }
             let mut source_entry = None;
             for adapter in adapters.iter() {
                 if !ext.agents.contains(&adapter.name().to_string()) {
@@ -1464,6 +1512,30 @@ pub fn install_to_agent(
             })?;
             let deployed_name = deployer::deploy_skill(&source_path, &target_dir)?;
             Ok(deployed_name)
+        }
+        ExtensionKind::Subagent | ExtensionKind::Command => {
+            let source_path = ext
+                .source_path
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| HkError::NotFound("Extension source path missing".into()))?;
+            let source_path = if source_path.exists() {
+                source_path
+            } else {
+                std::path::PathBuf::from(format!("{}.disabled", source_path.display()))
+            };
+            let target_dir = match ext.kind {
+                ExtensionKind::Subagent => target_adapter.subagent_dir_for(target_scope),
+                ExtensionKind::Command => target_adapter.command_dir_for(target_scope),
+                _ => unreachable!(),
+            }
+            .ok_or_else(|| {
+                HkError::Validation(format!(
+                    "{target_agent} does not support {} extensions at this scope",
+                    ext.kind.as_str()
+                ))
+            })?;
+            deployer::deploy_managed_file(&source_path, &target_dir, &ext.name)
         }
         other => Err(HkError::Internal(format!(
             "Cross-agent deploy not supported for '{}' extensions",

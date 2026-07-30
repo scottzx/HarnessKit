@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="public/icons/harnesskit-icons.png" alt="HarnessKit" width="160" />
-</p>
-
 <h1 align="center">HarnessKit</h1>
 
 <p align="center">

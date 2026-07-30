@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::models::*;
 
 /// Latest schema version supported by this binary.
-const LATEST_SCHEMA_VERSION: i64 = 8;
+const LATEST_SCHEMA_VERSION: i64 = 9;
 
 /// One row of `custom_config_paths`: (id, path, label, category, scope_json).
 /// `scope_json` is `None` for legacy rows that predate v4 schema migration.
@@ -75,8 +75,8 @@ fn skill_entry_path(source_path: &str) -> &Path {
 /// Upsert SQL for scanner-derived extensions (18 columns, no install meta).
 /// Used by `sync_extensions` and `sync_extensions_for_agent`.
 const UPSERT_EXTENSION_SQL: &str =
-    "INSERT INTO extensions (id, kind, name, description, source_json, agents_json, tags_json, permissions_json, enabled, trust_score, installed_at, updated_at, category, source_path, cli_parent_id, cli_meta_json, pack, scope_json)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+    "INSERT INTO extensions (id, kind, name, description, source_json, agents_json, tags_json, permissions_json, enabled, trust_score, installed_at, updated_at, category, source_path, cli_parent_id, cli_meta_json, pack, scope_json, scope_type, scope_path)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
      ON CONFLICT(id) DO UPDATE SET
        kind = excluded.kind,
        name = excluded.name,
@@ -91,13 +91,15 @@ const UPSERT_EXTENSION_SQL: &str =
        source_path = excluded.source_path,
        cli_parent_id = excluded.cli_parent_id,
        cli_meta_json = excluded.cli_meta_json,
-       scope_json = excluded.scope_json
+       scope_json = excluded.scope_json,
+       scope_type = excluded.scope_type,
+       scope_path = excluded.scope_path
        /* install meta columns intentionally excluded — preserved across re-scans */";
 
 /// Full upsert SQL for `insert_extension` (27 columns, includes install meta).
 const UPSERT_EXTENSION_FULL_SQL: &str =
-    "INSERT INTO extensions (id, kind, name, description, source_json, agents_json, tags_json, permissions_json, enabled, trust_score, installed_at, updated_at, category, source_path, cli_parent_id, cli_meta_json, install_type, install_url, install_url_resolved, install_branch, install_subpath, install_revision, remote_revision, checked_at, check_error, pack, scope_json)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+    "INSERT INTO extensions (id, kind, name, description, source_json, agents_json, tags_json, permissions_json, enabled, trust_score, installed_at, updated_at, category, source_path, cli_parent_id, cli_meta_json, install_type, install_url, install_url_resolved, install_branch, install_subpath, install_revision, remote_revision, checked_at, check_error, pack, scope_json, scope_type, scope_path)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
      ON CONFLICT(id) DO UPDATE SET
        kind = excluded.kind,
        name = excluded.name,
@@ -112,7 +114,16 @@ const UPSERT_EXTENSION_FULL_SQL: &str =
        source_path = excluded.source_path,
        cli_parent_id = excluded.cli_parent_id,
        cli_meta_json = excluded.cli_meta_json,
-       scope_json = excluded.scope_json";
+       scope_json = excluded.scope_json,
+       scope_type = excluded.scope_type,
+       scope_path = excluded.scope_path";
+
+fn scope_columns(scope: &ConfigScope) -> (&'static str, Option<&str>) {
+    match scope {
+        ConfigScope::Global => ("global", None),
+        ConfigScope::Project { path, .. } => ("project", Some(path.as_str())),
+    }
+}
 
 pub struct Store {
     conn: Connection,
@@ -205,6 +216,7 @@ impl Store {
         if current_version < 6 { self.migrate_v6()?; }
         if current_version < 7 { self.migrate_v7()?; }
         if current_version < 8 { self.migrate_v8()?; }
+        if current_version < 9 { self.migrate_v9()?; }
 
         // Update schema version to latest
         if current_version < LATEST_SCHEMA_VERSION {
@@ -409,6 +421,26 @@ impl Store {
         Ok(())
     }
 
+    /// Schema v9: normalized scope columns for indexed project inventory
+    /// queries. `scope_json` remains the wire-compatible source for the full
+    /// `ConfigScope` value (including project display name).
+    fn migrate_v9(&self) -> Result<(), HkError> {
+        self.migrate_add_column(
+            "ALTER TABLE extensions ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global'",
+        );
+        self.migrate_add_column("ALTER TABLE extensions ADD COLUMN scope_path TEXT");
+        self.conn.execute_batch(
+            "UPDATE extensions
+                SET scope_type = COALESCE(json_extract(scope_json, '$.type'), 'global'),
+                    scope_path = json_extract(scope_json, '$.path');
+             CREATE INDEX IF NOT EXISTS idx_extensions_scope
+                ON extensions(scope_type, scope_path);
+             CREATE INDEX IF NOT EXISTS idx_extensions_kind_scope
+                ON extensions(kind, scope_type, scope_path);",
+        )?;
+        Ok(())
+    }
+
     /// Schema v6: drop `kits.refreshed_at`. Kits are immutable snapshots.
     fn migrate_v6(&self) -> Result<(), HkError> {
         // Swallow "no such column" so the migration is idempotent on fresh DBs.
@@ -596,6 +628,7 @@ impl Store {
     /// Preserves user-set fields: enabled, tags, pack, trust_score, and install meta.
     pub fn insert_extension(&self, ext: &Extension) -> Result<(), HkError> {
         let im = ext.install_meta.as_ref();
+        let (scope_type, scope_path) = scope_columns(&ext.scope);
         self.conn.execute(
             UPSERT_EXTENSION_FULL_SQL,
             params![
@@ -626,6 +659,8 @@ impl Store {
                 im.and_then(|m| m.check_error.as_deref()),
                 ext.pack,
                 serde_json::to_string(&ext.scope)?,
+                scope_type,
+                scope_path,
             ],
         )?;
         // Keep extension_agents join table in sync
@@ -652,6 +687,19 @@ impl Store {
         kind: Option<ExtensionKind>,
         agent: Option<&str>,
     ) -> Result<Vec<Extension>, HkError> {
+        self.list_extensions_scoped(kind, agent, None, None)
+    }
+
+    /// List extensions with optional normalized scope filters. `scope_path`
+    /// requires `scope_type = "project"` and is compared exactly against the
+    /// canonical path supplied by the caller.
+    pub fn list_extensions_scoped(
+        &self,
+        kind: Option<ExtensionKind>,
+        agent: Option<&str>,
+        scope_type: Option<&str>,
+        scope_path: Option<&str>,
+    ) -> Result<Vec<Extension>, HkError> {
         let ext_cols = "e.id, e.kind, e.name, e.description, e.source_json, e.agents_json, e.tags_json, e.permissions_json, e.enabled, e.trust_score, e.installed_at, e.updated_at, e.category, e.source_path, e.cli_parent_id, e.cli_meta_json, e.install_type, e.install_url, e.install_url_resolved, e.install_branch, e.install_subpath, e.install_revision, e.remote_revision, e.checked_at, e.check_error, e.pack, e.scope_json";
 
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -670,6 +718,15 @@ impl Store {
         if let Some(k) = kind {
             sql.push_str(&format!(" AND e.kind = ?{}", param_values.len() + 1));
             param_values.push(Box::new(k.as_str().to_string()));
+        }
+
+        if let Some(scope_type) = scope_type {
+            sql.push_str(&format!(" AND e.scope_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(scope_type.to_string()));
+        }
+        if let Some(scope_path) = scope_path {
+            sql.push_str(&format!(" AND e.scope_path = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(scope_path.to_string()));
         }
 
         sql.push_str(" ORDER BY e.name ASC");
@@ -960,6 +1017,7 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
 
         for ext in extensions {
+            let (scope_type, scope_path) = scope_columns(&ext.scope);
             tx.execute(
                 UPSERT_EXTENSION_SQL,
                 params![
@@ -981,6 +1039,8 @@ impl Store {
                     ext.cli_meta.as_ref().map(|m| serde_json::to_string(m).unwrap_or_default()),
                     ext.pack,
                     serde_json::to_string(&ext.scope)?,
+                    scope_type,
+                    scope_path,
                 ],
             )?;
             // Keep extension_agents join table in sync
@@ -1088,6 +1148,7 @@ impl Store {
         // unchecked_transaction: safe because Store is behind a Mutex (single-writer guaranteed)
         let tx = self.conn.unchecked_transaction()?;
         for ext in extensions {
+            let (scope_type, scope_path) = scope_columns(&ext.scope);
             tx.execute(
                 UPSERT_EXTENSION_SQL,
                 params![
@@ -1109,6 +1170,8 @@ impl Store {
                     ext.cli_meta.as_ref().map(|m| serde_json::to_string(m).unwrap_or_default()),
                     ext.pack,
                     serde_json::to_string(&ext.scope)?,
+                    scope_type,
+                    scope_path,
                 ],
             )?;
             // Keep extension_agents join table in sync
@@ -3616,5 +3679,61 @@ mod tests {
         // Only the latest audit (with 0 findings) should be counted
         let counts = store.count_latest_findings_by_severity().unwrap();
         assert_eq!(counts.get("critical").copied().unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn list_extensions_scoped_uses_normalized_scope_columns() {
+        let (store, _dir) = test_store();
+        let mut global = sample_extension();
+        global.id = "global-command".into();
+        global.kind = ExtensionKind::Command;
+        global.scope = ConfigScope::Global;
+        store.insert_extension(&global).unwrap();
+
+        let mut project = sample_extension();
+        project.id = "project-command".into();
+        project.kind = ExtensionKind::Command;
+        project.scope = ConfigScope::Project {
+            name: "Demo".into(),
+            path: "/tmp/demo".into(),
+        };
+        store.insert_extension(&project).unwrap();
+
+        let global_rows = store
+            .list_extensions_scoped(
+                Some(ExtensionKind::Command),
+                None,
+                Some("global"),
+                None,
+            )
+            .unwrap();
+        assert_eq!(global_rows.len(), 1);
+        assert_eq!(global_rows[0].id, "global-command");
+
+        let project_rows = store
+            .list_extensions_scoped(
+                Some(ExtensionKind::Command),
+                None,
+                Some("project"),
+                Some("/tmp/demo"),
+            )
+            .unwrap();
+        assert_eq!(project_rows.len(), 1);
+        assert_eq!(project_rows[0].id, "project-command");
+
+        let indexes: Vec<String> = store
+            .conn_for_test()
+            .prepare("SELECT name FROM sqlite_master WHERE type='index'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(indexes.iter().any(|name| name == "idx_extensions_scope"));
+        assert!(
+            indexes
+                .iter()
+                .any(|name| name == "idx_extensions_kind_scope")
+        );
     }
 }

@@ -154,6 +154,14 @@ pub fn list_agent_configs(state: State<AppState>) -> Result<Vec<AgentDetail>, Hk
                 .filter(|e| e.kind == ExtensionKind::Hook)
                 .count(),
             cli: all.filter(|e| e.kind == ExtensionKind::Cli).count(),
+            subagent: extensions
+                .iter()
+                .filter(|e| e.kind == ExtensionKind::Subagent)
+                .count(),
+            command: extensions
+                .iter()
+                .filter(|e| e.kind == ExtensionKind::Command)
+                .count(),
         };
 
         results.push(AgentDetail {

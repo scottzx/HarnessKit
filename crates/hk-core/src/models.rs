@@ -46,6 +46,8 @@ pub enum ExtensionKind {
     Plugin,
     Hook,
     Cli,
+    Subagent,
+    Command,
 }
 
 impl ExtensionKind {
@@ -56,6 +58,8 @@ impl ExtensionKind {
             Self::Plugin => "plugin",
             Self::Hook => "hook",
             Self::Cli => "cli",
+            Self::Subagent => "subagent",
+            Self::Command => "command",
         }
     }
 }
@@ -69,6 +73,8 @@ impl FromStr for ExtensionKind {
             "plugin" => Ok(Self::Plugin),
             "hook" => Ok(Self::Hook),
             "cli" => Ok(Self::Cli),
+            "subagent" => Ok(Self::Subagent),
+            "command" => Ok(Self::Command),
             _ => Err(anyhow::anyhow!("unknown extension kind: {s}")),
         }
     }
@@ -345,6 +351,10 @@ pub struct KindFlags {
     pub mcp: bool,
     pub hook: bool,
     pub cli: bool,
+    #[serde(default)]
+    pub subagent: bool,
+    #[serde(default)]
+    pub command: bool,
 }
 
 /// Install-capability facts derived from an agent's adapter declarations
@@ -373,6 +383,8 @@ pub struct DashboardStats {
     pub plugin_count: usize,
     pub hook_count: usize,
     pub cli_count: usize,
+    pub subagent_count: usize,
+    pub command_count: usize,
     pub critical_issues: usize,
     pub high_issues: usize,
     pub medium_issues: usize,
@@ -492,6 +504,10 @@ pub struct ExtensionCounts {
     pub plugin: usize,
     pub hook: usize,
     pub cli: usize,
+    #[serde(default)]
+    pub subagent: usize,
+    #[serde(default)]
+    pub command: usize,
 }
 
 #[cfg(test)]
@@ -504,6 +520,8 @@ mod tests {
         assert_eq!(ExtensionKind::Mcp.as_str(), "mcp");
         assert_eq!(ExtensionKind::Plugin.as_str(), "plugin");
         assert_eq!(ExtensionKind::Hook.as_str(), "hook");
+        assert_eq!(ExtensionKind::Subagent.as_str(), "subagent");
+        assert_eq!(ExtensionKind::Command.as_str(), "command");
     }
 
     #[test]
@@ -513,6 +531,14 @@ mod tests {
             ExtensionKind::Skill
         );
         assert_eq!("mcp".parse::<ExtensionKind>().unwrap(), ExtensionKind::Mcp);
+        assert_eq!(
+            "subagent".parse::<ExtensionKind>().unwrap(),
+            ExtensionKind::Subagent
+        );
+        assert_eq!(
+            "command".parse::<ExtensionKind>().unwrap(),
+            ExtensionKind::Command
+        );
         assert!("invalid".parse::<ExtensionKind>().is_err());
     }
 

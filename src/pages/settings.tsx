@@ -57,9 +57,9 @@ const THEME_OPTIONS: {
   },
 ];
 
-const ICON_OPTIONS: { value: AppIcon; label: string; src: string }[] = [
-  { value: "icon-1", label: "Tiesen", src: "/icons/app-icon-1.png" },
-  { value: "icon-2", label: "Claude", src: "/icons/app-icon-2.png" },
+const ICON_OPTIONS: { value: AppIcon; label: string; mark: string }[] = [
+  { value: "icon-1", label: "1agents Mono", mark: "1A" },
+  { value: "icon-2", label: "1agents Grid", mark: "EX" },
 ];
 
 const LANGUAGE_OPTIONS: {
@@ -831,11 +831,12 @@ export default function SettingsPage() {
                               : "ring-1 ring-border hover:ring-primary/50",
                           )}
                         >
-                          <img
-                            src={icon.src}
-                            alt={icon.label}
-                            className="h-10 w-10 rounded-md"
-                          />
+                          <span
+                            aria-label={icon.label}
+                            className="flex h-10 w-10 items-center justify-center rounded-md bg-foreground text-[10px] font-bold tracking-tight text-background"
+                          >
+                            {icon.mark}
+                          </span>
                         </button>
                       ))}
                     </div>

@@ -165,6 +165,8 @@ pub async fn list_agent_configs(
                 plugin: extensions.iter().filter(|e| e.kind == ExtensionKind::Plugin).count(),
                 hook: extensions.iter().filter(|e| e.kind == ExtensionKind::Hook).count(),
                 cli: extensions.iter().filter(|e| e.kind == ExtensionKind::Cli).count(),
+                subagent: extensions.iter().filter(|e| e.kind == ExtensionKind::Subagent).count(),
+                command: extensions.iter().filter(|e| e.kind == ExtensionKind::Command).count(),
             };
 
             results.push(AgentDetail {
@@ -240,4 +242,3 @@ pub async fn remove_custom_config_path(
         Ok(())
     }).await
 }
-

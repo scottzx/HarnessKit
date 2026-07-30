@@ -20,7 +20,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { InstallDialog } from "@/components/extensions/install-dialog";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import { HermesCategoryPicker } from "@/components/shared/hermes-category-picker";
 import { Hint } from "@/components/shared/hint";
 import { ScopeTargetField } from "@/components/shared/scope-target-field";
@@ -849,7 +849,7 @@ export default function MarketplacePage() {
                             )}
                           >
                             <div className={isInstalled ? "" : "opacity-90"}>
-                              <AgentMascot name={agent.name} size={14} />
+                              <AgentBadge name={agent.name} size={14} />
                             </div>
                             <span
                               className={

@@ -11,7 +11,7 @@ import type {
   UnsyncKitRequest,
   UpdateKitRequest,
 } from "@/types/kits";
-import { transport } from "./transport";
+import { transport as defaultTransport, type Transport } from "./transport";
 import type {
   AgentDetail,
   AgentInfo,
@@ -47,7 +47,8 @@ function validateNonEmpty(value: string, label: string): void {
   }
 }
 
-export const api = {
+export function createApi(transport: Transport = defaultTransport) {
+  return {
   listExtensions(kind?: string, agent?: string): Promise<Extension[]> {
     return transport("list_extensions", { kind, agent });
   },
@@ -403,4 +404,10 @@ export const api = {
   listProjectInstallRecords(): Promise<ProjectInstallRecords[]> {
     return transport("list_project_install_records");
   },
-};
+  };
+}
+
+export type HarnessKitApi = ReturnType<typeof createApi>;
+
+/** Standalone API client. Embedders construct an instance with `createApi`. */
+export const api = createApi();

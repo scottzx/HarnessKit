@@ -16,6 +16,8 @@ pub struct ServeOptions {
     pub token: Option<String>,
     /// Optional node label override; falls back to the machine hostname.
     pub name: Option<String>,
+    /// Directory containing HarnessKit's metadata database and daemon state.
+    pub data_dir: std::path::PathBuf,
 }
 
 /// Resolve the display name for this node: the explicit `--name` if given,
@@ -47,9 +49,7 @@ fn reachable_ipv4_addrs() -> Vec<Ipv4Addr> {
 }
 
 pub async fn serve(options: ServeOptions) -> anyhow::Result<()> {
-    let data_dir = dirs::home_dir()
-        .expect("Cannot determine home directory")
-        .join(".harnesskit");
+    let data_dir = options.data_dir;
     std::fs::create_dir_all(&data_dir)?;
     let store = Store::open(&data_dir.join("metadata.db"))?;
 
@@ -66,18 +66,9 @@ pub async fn serve(options: ServeOptions) -> anyhow::Result<()> {
     let app = router::build_router(state);
     let addr: SocketAddr = format!("{}:{}", options.host, options.port).parse()?;
 
-    // When auth is enabled, embed the token in the URL so the user can paste a
-    // single link and be logged in — the frontend reads it and strips it from
-    // the address bar. Mirrors Jupyter's `?token=` flow.
-    let token_query = options
-        .token
-        .as_deref()
-        .map(|t| format!("/?token={t}"))
-        .unwrap_or_default();
-
     match options.host.as_str() {
         "127.0.0.1" => {
-            eprintln!("HarnessKit Web UI [{node_name}] running at http://{addr}{token_query}");
+            eprintln!("HarnessKit Web UI [{node_name}] running at http://{addr}");
             eprintln!("Access via SSH tunnel: ssh -L {p}:localhost:{p} your-server", p = options.port);
         }
         // 0.0.0.0 binds every interface but is not itself a reachable address,
@@ -89,16 +80,16 @@ pub async fn serve(options: ServeOptions) -> anyhow::Result<()> {
                 eprintln!("Use this machine's LAN IP at port {}", options.port);
             } else {
                 for ip in addrs {
-                    eprintln!("Reachable on your network at http://{ip}:{}{token_query}", options.port);
+                    eprintln!("Reachable on your network at http://{ip}:{}", options.port);
                 }
             }
         }
         _ => {
-            eprintln!("HarnessKit Web UI [{node_name}] running at http://{addr}{token_query}");
+            eprintln!("HarnessKit Web UI [{node_name}] running at http://{addr}");
         }
     }
-    if let Some(token) = &options.token {
-        eprintln!("Auth token: {token}");
+    if options.token.is_some() {
+        eprintln!("Authentication enabled (token omitted from logs)");
     }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

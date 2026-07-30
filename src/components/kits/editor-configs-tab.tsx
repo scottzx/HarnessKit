@@ -2,7 +2,7 @@ import { clsx } from "clsx";
 import { Check, Eye, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import {
   type AgentConfigFile,
   agentDisplayName,
@@ -260,7 +260,7 @@ export function EditorConfigsTab({
                   className="flex shrink-0 items-end justify-center"
                   style={{ width: 20, height: 20 }}
                 >
-                  <AgentMascot name={c.agent} size={18} />
+                  <AgentBadge name={c.agent} size={18} />
                 </span>
                 <span className="flex-1 truncate text-sm">{c.file_name}</span>
                 <span className="truncate text-xs text-muted-foreground">

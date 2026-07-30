@@ -1,6 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use hk_core::{adapter, store::Store};
+use hk_core::models::{ConfigScope, Extension};
 use hk_web::state::WebState;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -107,6 +108,90 @@ async fn auth_required_when_token_set() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn authenticated_router_does_not_advertise_wildcard_cors() {
+    let (mut state, _tmp) = test_state();
+    state.token = Some("secret123".into());
+    let app = hk_web::router::build_router(state);
+    let response = app
+        .oneshot(
+            Request::get("/api/health")
+                .header("authorization", "Bearer secret123")
+                .header("origin", "https://untrusted.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.headers().get("access-control-allow-origin").is_none(),
+        "authenticated daemon must not emit wildcard CORS"
+    );
+}
+
+#[tokio::test]
+async fn list_extensions_filters_by_project_scope() {
+    let (state, _tmp) = test_state();
+    let make_extension = |id: &str, scope: ConfigScope| -> Extension {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "kind": "command",
+            "name": id,
+            "description": "",
+            "source": {"origin":"agent","url":null,"version":null,"commit_hash":null,"from_manifest":false},
+            "agents": ["claude"],
+            "tags": [],
+            "pack": null,
+            "permissions": [],
+            "enabled": true,
+            "trust_score": null,
+            "installed_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "source_path": null,
+            "cli_parent_id": null,
+            "cli_meta": null,
+            "install_meta": null,
+            "scope": scope
+        }))
+        .unwrap()
+    };
+    {
+        let store = state.store.lock();
+        store
+            .insert_extension(&make_extension("global", ConfigScope::Global))
+            .unwrap();
+        store
+            .insert_extension(&make_extension(
+                "project",
+                ConfigScope::Project {
+                    name: "Demo".into(),
+                    path: "/tmp/demo".into(),
+                },
+            ))
+            .unwrap();
+    }
+    let app = hk_web::router::build_router(state);
+    let response = app
+        .oneshot(
+            Request::post("/api/list_extensions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"kind":"command","scope_type":"project","scope_path":"/tmp/demo"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let rows: Vec<Extension> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "project");
 }
 
 #[tokio::test]

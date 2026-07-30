@@ -40,7 +40,7 @@ describe("EditorConfigsTab", () => {
     expect(within(list).getByText("CLAUDE.md")).toBeInTheDocument();
     expect(within(list).getByText(".cursorrules")).toBeInTheDocument();
     expect(within(list).getByText("MEMORY.md")).toBeInTheDocument();
-    // Agent is rendered as an icon (AgentMascot) with display name in
+    // Agent is rendered as a neutral initial badge with display name in
     // aria-label/title — saves horizontal space vs a text badge.
     expect(within(list).getAllByLabelText("Claude Code")).toHaveLength(2);
     expect(within(list).getByLabelText("Cursor")).toBeInTheDocument();

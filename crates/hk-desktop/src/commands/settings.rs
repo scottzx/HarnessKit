@@ -27,6 +27,14 @@ pub fn get_dashboard_stats(state: State<AppState>) -> Result<DashboardStats, HkE
             .count(),
         hook_count: all.iter().filter(|e| e.kind == ExtensionKind::Hook).count(),
         cli_count: all.iter().filter(|e| e.kind == ExtensionKind::Cli).count(),
+        subagent_count: all
+            .iter()
+            .filter(|e| e.kind == ExtensionKind::Subagent)
+            .count(),
+        command_count: all
+            .iter()
+            .filter(|e| e.kind == ExtensionKind::Command)
+            .count(),
         critical_issues: severity_counts.get("critical").copied().unwrap_or(0),
         high_issues: severity_counts.get("high").copied().unwrap_or(0),
         medium_issues: severity_counts.get("medium").copied().unwrap_or(0),

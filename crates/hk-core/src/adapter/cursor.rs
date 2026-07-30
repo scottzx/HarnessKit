@@ -169,6 +169,17 @@ impl AgentAdapter for CursorAdapter {
         super::files_with_ext(&self.base_dir().join("agents"), "md").collect()
     }
 
+    fn global_command_files(&self) -> Vec<PathBuf> {
+        super::managed_files_with_ext(&self.base_dir().join("commands"), "md").collect()
+    }
+
+    fn command_dir_for(&self, scope: &crate::models::ConfigScope) -> Option<PathBuf> {
+        match scope {
+            crate::models::ConfigScope::Global => Some(self.base_dir().join("commands")),
+            crate::models::ConfigScope::Project { .. } => None,
+        }
+    }
+
     fn project_markers(&self) -> Vec<ProjectMarker> {
         vec![
             ProjectMarker::Dir(".cursor/rules"),

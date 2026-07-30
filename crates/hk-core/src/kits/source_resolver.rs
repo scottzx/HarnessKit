@@ -46,8 +46,56 @@ pub fn find_extension_source_by_id(
         ExtensionKind::Mcp => find_mcp_source(adapters, agents, scope),
         ExtensionKind::Hook => find_hook_source(adapters, agents, scope),
         ExtensionKind::Cli => find_cli_source(adapters, agents, scope),
+        ExtensionKind::Subagent | ExtensionKind::Command => {
+            find_managed_file_source(adapters, extension_id, kind, agents, scope, projects)
+        }
         ExtensionKind::Plugin => None, // not Kit-able in v1
     }
+}
+
+fn find_managed_file_source(
+    adapters: &[Box<dyn AgentAdapter>],
+    extension_id: &str,
+    kind: ExtensionKind,
+    agents: &[String],
+    scope: &ConfigScope,
+    projects: &[(String, String)],
+) -> Option<ExtensionLocation> {
+    for adapter in adapters {
+        if !agents.iter().any(|agent| agent == adapter.name()) {
+            continue;
+        }
+        let extensions = match scope {
+            ConfigScope::Global => scanner::scan_adapter(adapter.as_ref()),
+            ConfigScope::Project { path, name } => scanner::scan_project_extensions(
+                adapter.as_ref(),
+                name,
+                std::path::Path::new(path),
+            ),
+        };
+        if let Some(extension) = extensions
+            .into_iter()
+            .find(|extension| extension.id == extension_id && extension.kind == kind)
+            && let Some(path) = extension.source_path
+        {
+            let original = PathBuf::from(path);
+            let entry_path = if original.exists() {
+                original
+            } else {
+                PathBuf::from(format!("{}.disabled", original.display()))
+            };
+            if !entry_path.exists() {
+                continue;
+            }
+            return Some(ExtensionLocation {
+                entry_path,
+                agent: Some(adapter.name().to_string()),
+            });
+        }
+    }
+    // Keep the parameter meaningful for future project-registry validation.
+    let _ = projects;
+    None
 }
 
 /// Return the first enrolled agent's MCP config file path for the given scope.

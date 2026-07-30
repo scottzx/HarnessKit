@@ -34,6 +34,22 @@ const INSTALL_TYPE_KIT: &str = "kit";
 const HOOK_V1_NOT_KITABLE: &str =
     "Hook extensions are not Kit-able (sync deferred)";
 
+fn managed_file_location(ext: &crate::models::Extension) -> Option<ExtensionLocation> {
+    if !matches!(ext.kind, ExtensionKind::Subagent | ExtensionKind::Command) {
+        return None;
+    }
+    let original = std::path::PathBuf::from(ext.source_path.as_deref()?);
+    let path = if original.exists() {
+        original
+    } else {
+        std::path::PathBuf::from(format!("{}.disabled", original.display()))
+    };
+    path.exists().then(|| ExtensionLocation {
+        entry_path: path,
+        agent: ext.agents.first().cloned(),
+    })
+}
+
 /// List all Kits as summaries (counts + corrupt flag).
 pub fn list_kits(store: &Mutex<Store>) -> Result<Vec<KitSummary>, HkError> {
     let store = store.lock();
@@ -84,6 +100,8 @@ pub fn list_kits(store: &Mutex<Store>) -> Result<Vec<KitSummary>, HkError> {
                 Some(ExtensionKind::Plugin) => kind_counts.plugin += 1,
                 Some(ExtensionKind::Hook) => kind_counts.hook += 1,
                 Some(ExtensionKind::Cli) => kind_counts.cli += 1,
+                Some(ExtensionKind::Subagent) => kind_counts.subagent += 1,
+                Some(ExtensionKind::Command) => kind_counts.command += 1,
                 // Truly unresolvable (e.g. corrupt zip): skip kind tally;
                 // extension_count still reflects total.
                 None => {}
@@ -319,8 +337,16 @@ fn resolve_and_pack_extensions(
             .find(|e| &e.id == id)
             .cloned()
             .ok_or_else(|| HkError::NotFound(format!("Extension '{id}' not found in store")))?;
-        let location =
-            find_extension_source_by_id(adapters, id, ext.kind, &ext.agents, &ext.scope, &projects)
+        let location = managed_file_location(&ext).or_else(|| {
+            find_extension_source_by_id(
+                adapters,
+                id,
+                ext.kind,
+                &ext.agents,
+                &ext.scope,
+                &projects,
+            )
+        })
                 .ok_or_else(|| HkError::NotFound(format!(
                     "{kind} '{name}' (id {id}) source could not be located on disk",
                     kind = match ext.kind {
@@ -329,6 +355,8 @@ fn resolve_and_pack_extensions(
                         ExtensionKind::Hook => "Hook",
                         ExtensionKind::Cli => "CLI",
                         ExtensionKind::Plugin => "Plugin",
+                        ExtensionKind::Subagent => "Subagent",
+                        ExtensionKind::Command => "Command",
                     },
                     name = ext.name,
                 )))?;
@@ -414,6 +442,31 @@ fn embed_extension(
             let hash = sha256_of_dir(base)
                 .map_err(|e| HkError::Internal(format!("hash skill dir: {e}")))?;
             Ok((asset_prefix.to_string(), hash, entries, false))
+        }
+        ExtensionKind::Subagent | ExtensionKind::Command => {
+            let bytes = std::fs::read(&loc.entry_path).map_err(|e| {
+                HkError::Internal(format!(
+                    "pack {} {}: {e}",
+                    kind.as_str(),
+                    loc.entry_path.display()
+                ))
+            })?;
+            let extension = loc
+                .entry_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("md");
+            let asset_path = format!("{asset_prefix}asset.{extension}");
+            let hash = sha256_of_bytes(&bytes);
+            Ok((
+                asset_path.clone(),
+                hash,
+                vec![PackEntry {
+                    zip_path: asset_path,
+                    bytes,
+                }],
+                false,
+            ))
         }
         ExtensionKind::Hook => Err(HkError::Validation(HOOK_V1_NOT_KITABLE.into())),
         ExtensionKind::Mcp => {
@@ -511,7 +564,11 @@ pub fn list_kit_asset_candidates(
     let project_tuples = store.list_project_tuples();
     let kit_able = all_exts.into_iter().filter(|e| match e.kind {
         // URL-only MCPs surface here; the pack-time error explains why they fail.
-        ExtensionKind::Skill | ExtensionKind::Cli | ExtensionKind::Mcp => true,
+        ExtensionKind::Skill
+        | ExtensionKind::Cli
+        | ExtensionKind::Mcp
+        | ExtensionKind::Subagent
+        | ExtensionKind::Command => true,
         ExtensionKind::Hook | ExtensionKind::Plugin => false,
     });
 
@@ -519,15 +576,16 @@ pub fn list_kit_asset_candidates(
     // rows whose on-disk source has disappeared (which would fail at pack time).
     let resolvable: Vec<crate::models::Extension> = kit_able
         .filter(|ext| {
-            find_extension_source_by_id(
-                adapters,
-                &ext.id,
-                ext.kind,
-                &ext.agents,
-                &ext.scope,
-                &project_tuples,
-            )
-            .is_some()
+            managed_file_location(ext).is_some()
+                || find_extension_source_by_id(
+                    adapters,
+                    &ext.id,
+                    ext.kind,
+                    &ext.agents,
+                    &ext.scope,
+                    &project_tuples,
+                )
+                .is_some()
         })
         .collect();
 
@@ -957,6 +1015,17 @@ fn apply_extension_item(
             extract_prefix_to_dir(zip_pb, &item.zip_entry_path, &item.target_path)?;
             Ok(Some(item.target_path.to_string_lossy().into()))
         }
+        ExtensionKind::Subagent | ExtensionKind::Command => {
+            if item.target_path.exists() && force {
+                std::fs::remove_file(&item.target_path)?;
+            }
+            if let Some(parent) = item.target_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let bytes = read_zip_entry_bytes(zip_pb, &item.zip_entry_path)?;
+            std::fs::write(&item.target_path, bytes)?;
+            Ok(Some(item.target_path.to_string_lossy().into()))
+        }
         ExtensionKind::Mcp => {
             let entry_bytes = read_zip_entry_bytes(zip_pb, &item.zip_entry_path)?;
             let mut entry_struct: McpServerEntry = serde_json::from_slice(&entry_bytes)
@@ -1238,6 +1307,8 @@ pub fn import_kit(
             ExtensionKind::Plugin => kind_counts.plugin += 1,
             ExtensionKind::Hook => kind_counts.hook += 1,
             ExtensionKind::Cli => kind_counts.cli += 1,
+            ExtensionKind::Subagent => kind_counts.subagent += 1,
+            ExtensionKind::Command => kind_counts.command += 1,
         }
     }
     let search_keywords = build_kit_search_keywords(
@@ -1298,4 +1369,3 @@ fn dedupe_name(desired: &str, existing: &[&str]) -> Result<String, HkError> {
         "Could not find a unique name for imported kit '{desired}' after 1000 attempts"
     )))
 }
-

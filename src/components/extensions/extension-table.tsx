@@ -10,7 +10,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import { KindBadge } from "@/components/shared/kind-badge";
 import { PermissionTags } from "@/components/shared/permission-tags";
 import { TrustBadge } from "@/components/shared/trust-badge";
@@ -141,7 +141,7 @@ export function ExtensionTable({
                 className="flex items-end justify-center"
                 style={{ width: 20, height: 20 }}
               >
-                <AgentMascot name={name} size={18} />
+                <AgentBadge name={name} size={18} />
               </div>
             ))}
           </div>

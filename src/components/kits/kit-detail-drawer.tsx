@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import i18n from "@/lib/i18n";
 import { agentDisplayName } from "@/lib/types";
 import { useAgentStore } from "@/stores/agent-store";
@@ -329,7 +329,7 @@ export function KitDetailDrawer({ kitId, onClose }: Props) {
                               title={agentDisplayName(a)}
                               className="inline-flex items-center"
                             >
-                              <AgentMascot name={a} size={14} />
+                              <AgentBadge name={a} size={14} />
                             </span>
                           ))}
                         </div>

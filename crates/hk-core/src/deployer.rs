@@ -27,6 +27,62 @@ pub fn deploy_skill(source_path: &Path, target_skill_dir: &Path) -> Result<Strin
     }
 }
 
+/// Deploy a single-file extension using an adapter-owned native directory.
+/// The display name may be Unicode, but the filename is normalized to a
+/// conservative portable slug to avoid traversal and cross-platform surprises.
+pub fn deploy_managed_file(
+    source_path: &Path,
+    target_dir: &Path,
+    display_name: &str,
+) -> Result<String, HkError> {
+    if !source_path.is_file() {
+        return Err(HkError::Validation(format!(
+            "Source is not a file: {}",
+            source_path.display()
+        )));
+    }
+    let slug = portable_slug(display_name);
+    if slug.is_empty() {
+        return Err(HkError::Validation(
+            "Extension name cannot produce a safe native filename".into(),
+        ));
+    }
+    let source_name = source_path
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    let logical_name = source_name.strip_suffix(".disabled").unwrap_or(&source_name);
+    let extension = Path::new(logical_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("md");
+    std::fs::create_dir_all(target_dir)?;
+    let target = target_dir.join(format!("{slug}.{extension}"));
+    if target.exists() {
+        return Err(HkError::Conflict(format!(
+            "Target already exists: {}",
+            target.display()
+        )));
+    }
+    std::fs::copy(source_path, &target)?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+fn portable_slug(name: &str) -> String {
+    let mut result = String::new();
+    let mut separator = false;
+    for ch in name.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
+            result.push(ch);
+            separator = false;
+        } else if !separator && !result.is_empty() {
+            result.push('-');
+            separator = true;
+        }
+    }
+    result.trim_matches('-').to_string()
+}
+
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), HkError> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)?.flatten() {
@@ -3611,5 +3667,35 @@ mod tests {
         let entries: Vec<(String, bool)> = serde_json::from_str(&result).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "file:///plugin-b");
+    }
+
+    #[test]
+    fn deploy_managed_file_preserves_content_and_uses_portable_slug() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source.md");
+        let target = dir.path().join("commands");
+        std::fs::write(&source, "---\ndescription: Demo\n---\nRun it.").unwrap();
+
+        let written = deploy_managed_file(&source, &target, "Review / 安全").unwrap();
+        let written = std::path::PathBuf::from(written);
+        assert_eq!(
+            std::fs::read_to_string(&written).unwrap(),
+            "---\ndescription: Demo\n---\nRun it."
+        );
+        assert_eq!(
+            written.file_name().and_then(|value| value.to_str()),
+            Some("Review-安全.md")
+        );
+
+        let disabled_source = dir.path().join("disabled.md.disabled");
+        std::fs::write(&disabled_source, "Still portable.").unwrap();
+        let disabled_written =
+            deploy_managed_file(&disabled_source, &target, "Disabled Source").unwrap();
+        assert_eq!(
+            std::path::Path::new(&disabled_written)
+                .file_name()
+                .and_then(|value| value.to_str()),
+            Some("Disabled-Source.md")
+        );
     }
 }

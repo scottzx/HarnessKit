@@ -13,6 +13,11 @@ use std::path::PathBuf;
     version
 )]
 struct Cli {
+    /// HarnessKit state directory. Also configurable through
+    /// `HARNESSKIT_DATA_DIR`; the CLI flag takes precedence.
+    #[arg(long, global = true, env = "HARNESSKIT_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -86,11 +91,11 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
 
-        /// Access token. If omitted, a persistent token is auto-generated and
-        /// stored at ~/.harnesskit/web-token (mode 0600). Prefer this over
+        /// Access token. If omitted, a persistent token is auto-generated in
+        /// the selected data directory as web-token (mode 0600). Prefer this over
         /// passing --token on shared hosts: command-line args are visible to
         /// other users via `ps`/`/proc/<pid>/cmdline`.
-        #[arg(long)]
+        #[arg(long, env = "HARNESSKIT_TOKEN")]
         token: Option<String>,
 
         /// Disable authentication entirely (no token). Only safe on a trusted
@@ -108,6 +113,7 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let data_dir = cli.data_dir.clone().unwrap_or_else(hk_data_dir);
 
     if let Commands::Serve {
         port,
@@ -117,7 +123,7 @@ fn main() -> Result<()> {
         name,
     } = cli.command
     {
-        let effective_token = resolve_serve_token(token, no_token);
+        let effective_token = resolve_serve_token(token, no_token, &data_dir);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(hk_web::serve(hk_web::ServeOptions {
@@ -125,11 +131,11 @@ fn main() -> Result<()> {
             host,
             token: effective_token,
             name,
+            data_dir,
         }))?;
         return Ok(());
     }
 
-    let data_dir = hk_data_dir();
     std::fs::create_dir_all(&data_dir)?;
     let store = Store::open(&data_dir.join("metadata.db"))?;
     let adapters = adapter::all_adapters();
@@ -199,14 +205,18 @@ fn hk_data_dir() -> PathBuf {
 /// even for `127.0.0.1` binds. On a shared host (HPC login node) the loopback
 /// interface is not isolated per-user, so binding `127.0.0.1` alone does not
 /// keep other local users out — only the token does.
-fn resolve_serve_token(explicit: Option<String>, no_token: bool) -> Option<String> {
+fn resolve_serve_token(
+    explicit: Option<String>,
+    no_token: bool,
+    data_dir: &std::path::Path,
+) -> Option<String> {
     if no_token {
         return None;
     }
     if let Some(token) = explicit {
         return Some(token);
     }
-    Some(load_or_create_token())
+    Some(load_or_create_token(data_dir))
 }
 
 /// Generate a 128-bit random token rendered as 32 hex chars.
@@ -223,8 +233,8 @@ fn generate_token() -> String {
 /// are looser than `0600` (e.g. left world-readable by an older version or a
 /// hostile pre-creation), the token is treated as compromised and regenerated.
 /// Falls back to an in-memory token if the file cannot be persisted.
-fn load_or_create_token() -> String {
-    let path = hk_data_dir().join("web-token");
+fn load_or_create_token(data_dir: &std::path::Path) -> String {
+    let path = data_dir.join("web-token");
 
     if let Some(token) = read_token_if_secure(&path) {
         return token;
@@ -407,6 +417,8 @@ fn cmd_status(
     let mut plugins = 0u32;
     let mut hooks = 0u32;
     let mut clis = 0u32;
+    let mut subagents = 0u32;
+    let mut commands = 0u32;
 
     for ext in extensions {
         let key = group_key(ext);
@@ -419,6 +431,8 @@ fn cmd_status(
             ExtensionKind::Plugin => plugins += 1,
             ExtensionKind::Hook => hooks += 1,
             ExtensionKind::Cli => clis += 1,
+            ExtensionKind::Subagent => subagents += 1,
+            ExtensionKind::Command => commands += 1,
         }
     }
     let total = groups.len();
@@ -437,14 +451,16 @@ fn cmd_status(
         detected.join(" · ")
     );
     println!(
-        "  {}    {} total ({} skills · {} mcp · {} plugins · {} hooks · {} clis)",
+        "  {}    {} total ({} skills · {} mcp · {} plugins · {} hooks · {} clis · {} subagents · {} commands)",
         "Extensions".dimmed(),
         total,
         skills,
         mcps,
         plugins,
         hooks,
-        clis
+        clis,
+        subagents,
+        commands
     );
     println!();
     Ok(())
@@ -890,6 +906,41 @@ mod cli_json_tests {
         match cli.command {
             Commands::List { json, .. } => assert!(json),
             _ => panic!("expected list command"),
+        }
+    }
+
+    #[test]
+    fn parse_serve_accepts_host_contract_data_dir_after_subcommand() {
+        let cli = Cli::try_parse_from([
+            "hk",
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "7123",
+            "--token",
+            "ephemeral",
+            "--data-dir",
+            "/tmp/harnesskit-host",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.data_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/harnesskit-host"))
+        );
+        match cli.command {
+            Commands::Serve {
+                host,
+                port,
+                token,
+                ..
+            } => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, 7123);
+                assert_eq!(token.as_deref(), Some("ephemeral"));
+            }
+            _ => panic!("expected serve command"),
         }
     }
 

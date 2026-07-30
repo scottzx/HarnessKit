@@ -20,7 +20,7 @@ import { DetailHeader } from "@/components/extensions/detail-header";
 import { DetailPaths } from "@/components/extensions/detail-paths";
 import { PermissionDetail } from "@/components/extensions/permission-detail";
 import { SkillFileSection } from "@/components/extensions/skill-file-section";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import { HermesCategoryPicker } from "@/components/shared/hermes-category-picker";
 import { ScopeTargetField } from "@/components/shared/scope-target-field";
 import { canInstallAtScope } from "@/lib/agent-capabilities";
@@ -720,7 +720,7 @@ export function ExtensionDetail() {
                         )}
                       >
                         <div className={isInstalled ? "" : "opacity-90"}>
-                          <AgentMascot name={agent.name} size={14} />
+                          <AgentBadge name={agent.name} size={14} />
                         </div>
                         {agentDisplayName(agent.name)}
                         {isInstalled ? (

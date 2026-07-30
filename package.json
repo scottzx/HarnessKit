@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite --port 1420",
     "build": "tsc && vite build",
+    "build:embed": "tsc && vite build --mode embed",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

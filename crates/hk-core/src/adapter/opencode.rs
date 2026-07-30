@@ -257,6 +257,19 @@ impl AgentAdapter for OpencodeAdapter {
         super::files_with_ext(&self.base_dir().join("commands"), "md").collect()
     }
 
+    fn global_command_files(&self) -> Vec<PathBuf> {
+        super::managed_files_with_ext(&self.base_dir().join("commands"), "md").collect()
+    }
+
+    fn command_dir_for(&self, scope: &ConfigScope) -> Option<PathBuf> {
+        match scope {
+            ConfigScope::Global => Some(self.base_dir().join("commands")),
+            ConfigScope::Project { path, .. } => {
+                Some(Path::new(path).join(".opencode/commands"))
+            }
+        }
+    }
+
     fn project_markers(&self) -> Vec<ProjectMarker> {
         // `.opencode/` (subdirs for skills/commands/plugins/agents/modes/themes)
         // is the most reliable marker. opencode.json[c] at project root is the
@@ -286,6 +299,10 @@ impl AgentAdapter for OpencodeAdapter {
         // Slash commands: .opencode/commands/*.md
         // (https://opencode.ai/docs/commands/).
         vec![".opencode/commands/*.md".into()]
+    }
+
+    fn project_command_patterns(&self) -> Vec<String> {
+        self.project_workflow_patterns()
     }
 
     fn project_subagent_patterns(&self) -> Vec<String> {

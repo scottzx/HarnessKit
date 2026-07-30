@@ -1,12 +1,38 @@
 /**
  * Transport layer abstraction.
- * Detects whether we're running inside Tauri (desktop) or a plain browser (web mode).
- * In Tauri: uses IPC invoke(). In browser: uses HTTP POST to /api/{command}.
+ *
+ * Standalone HarnessKit uses the default transport exported at the bottom of
+ * this module. Embedders create their own transport with
+ * `createHttpTransport`; no mutable module-global API base is involved.
  */
 
-// Tauri v2 injects __TAURI_INTERNALS__ on the window object
+export type Transport = <T>(
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
+
+export interface HttpTransportOptions {
+  apiBase: string;
+  fetch?: typeof globalThis.fetch;
+  getAuthToken?: () => string | null;
+  credentials?: RequestCredentials;
+  signal?: AbortSignal;
+}
+
+// Ensure __TAURI_INTERNALS__ stub exists so @tauri-apps/api doesn't throw when initialized in pure browser/iframe
+if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
+  (window as any).__TAURI_INTERNALS__ = {
+    metadata: {},
+    invoke: () => Promise.reject(new Error("Not in Tauri")),
+    transformCallback: () => 0,
+  };
+}
+
+// Tauri v2 injects __TAURI_INTERNALS__ on the window object with currentWindow metadata
 const isTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  typeof window !== "undefined" &&
+  "__TAURI_INTERNALS__" in window &&
+  Boolean((window as any).__TAURI_INTERNALS__?.metadata?.currentWindow);
 
 // Use a Promise to avoid race condition: the first API call waits for the
 // dynamic import to resolve before proceeding.
@@ -21,7 +47,7 @@ const tauriInvokePromise: Promise<
  * - In Tauri: `invoke(command, args)` via IPC
  * - In browser: `POST /api/{command}` with JSON body
  */
-export async function transport<T>(
+async function standaloneTransport<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
@@ -29,7 +55,7 @@ export async function transport<T>(
     const invoke = await tauriInvokePromise;
     return invoke(command, args) as Promise<T>;
   }
-  return httpInvoke<T>(command, args);
+  return standaloneHttpTransport<T>(command, args);
 }
 
 /** Token for authenticated web mode — set by the login page or URL param */
@@ -74,33 +100,61 @@ function toSnakeKeys(obj: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
-async function httpInvoke<T>(
-  command: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  const token = getAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`/api/${command}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(toSnakeKeys(args ?? {})),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    // Throw as-is — parseError() in error-types.ts handles both
-    // JSON HkError strings and plain text formats
-    throw text || `HTTP ${response.status}`;
-  }
-
-  return response.json() as Promise<T>;
+function normalizeApiBase(apiBase: string): string {
+  const trimmed = apiBase.trim();
+  if (!trimmed) throw new Error("HarnessKit API base cannot be empty");
+  return trimmed.replace(/\/+$/, "");
 }
+
+/**
+ * Build a transport owned by one application/custom-element instance.
+ *
+ * The caller supplies fetch rather than the transport reading it from a
+ * mutable singleton. In the 1agents embed this is the parent window's fetch,
+ * which preserves its relay interception and authenticated session.
+ */
+export function createHttpTransport(options: HttpTransportOptions): Transport {
+  const apiBase = normalizeApiBase(options.apiBase);
+  const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+
+  return async function httpTransport<T>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const token = options.getAuthToken?.();
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const response = await fetchImpl(
+      `${apiBase}/${encodeURIComponent(command)}`,
+      {
+        method: "POST",
+        headers,
+        credentials: options.credentials ?? "same-origin",
+        signal: options.signal,
+        body: JSON.stringify(toSnakeKeys(args ?? {})),
+      },
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      // Throw as-is — parseError() in error-types.ts handles both
+      // JSON HkError strings and plain text formats.
+      throw text || `HTTP ${response.status}`;
+    }
+
+    return response.json() as Promise<T>;
+  };
+}
+
+const standaloneHttpTransport = createHttpTransport({
+  apiBase: "/api",
+  getAuthToken,
+});
+
+export const transport: Transport = standaloneTransport;
 
 /** Whether we're running in Tauri desktop or web browser */
 export function isDesktop(): boolean {

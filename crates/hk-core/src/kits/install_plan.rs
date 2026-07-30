@@ -109,6 +109,13 @@ pub fn compute_kit_install_plan(
         .ok_or_else(|| HkError::NotFound(format!("Agent '{agent_name}' not found")))?;
     let manifest = read_manifest_from_zip(zip_path)?;
     let project_root = PathBuf::from(project_path);
+    let project_scope = crate::models::ConfigScope::Project {
+        name: project_root
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| "project".into()),
+        path: project_path.to_string(),
+    };
     let mut items = Vec::new();
 
     for ext in manifest.extensions.iter() {
@@ -139,6 +146,30 @@ pub fn compute_kit_install_plan(
                 .ok_or_else(|| HkError::Internal(format!(
                     "Agent '{agent_name}' has no install dir for CLI assets"
                 )))?,
+            ExtensionKind::Subagent => adapter
+                .subagent_dir_for(&project_scope)
+                .and_then(|path| {
+                    path.strip_prefix(&project_root)
+                        .ok()
+                        .map(|value| value.to_string_lossy().to_string())
+                })
+                .ok_or_else(|| {
+                    HkError::Validation(format!(
+                        "Agent '{agent_name}' doesn't support project-level subagents"
+                    ))
+                })?,
+            ExtensionKind::Command => adapter
+                .command_dir_for(&project_scope)
+                .and_then(|path| {
+                    path.strip_prefix(&project_root)
+                        .ok()
+                        .map(|value| value.to_string_lossy().to_string())
+                })
+                .ok_or_else(|| {
+                    HkError::Validation(format!(
+                        "Agent '{agent_name}' doesn't support project-level commands"
+                    ))
+                })?,
             ExtensionKind::Plugin => {
                 return Err(HkError::Internal(
                     "plugin kind is not Kit-able in v1".into(),
@@ -152,6 +183,9 @@ pub fn compute_kit_install_plan(
                 project_root.join(&target_dir).join(&ext.name)
             }
             ExtensionKind::Mcp | ExtensionKind::Hook => project_root.join(&target_dir),
+            ExtensionKind::Subagent | ExtensionKind::Command => {
+                project_root.join(&target_dir).join(format!("{}.md", ext.name))
+            }
             ExtensionKind::Plugin => unreachable!(),
         };
         // For MCP entries the right conflict question is "does this server name

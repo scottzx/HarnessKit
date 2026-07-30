@@ -239,8 +239,6 @@ impl AgentAdapter for ClaudeAdapter {
             self.base_dir().join("settings.local.json"),
             self.base_dir().join("keybindings.json"),
         ];
-        // ~/.claude/commands/*.md (legacy, still functional)
-        files.extend(super::files_with_ext(&self.base_dir().join("commands"), "md"));
         // ~/.claude/output-styles/*.md
         files.extend(super::files_with_ext(&self.base_dir().join("output-styles"), "md"));
         files
@@ -249,6 +247,34 @@ impl AgentAdapter for ClaudeAdapter {
     fn global_subagent_files(&self) -> Vec<PathBuf> {
         // ~/.claude/agents/*.md
         super::files_with_ext(&self.base_dir().join("agents"), "md").collect()
+    }
+
+    fn global_subagent_extension_files(&self) -> Vec<PathBuf> {
+        super::managed_files_with_ext(&self.base_dir().join("agents"), "md").collect()
+    }
+
+    fn global_command_files(&self) -> Vec<PathBuf> {
+        // Claude Code legacy slash commands remain a documented, functional
+        // file contract and are intentionally promoted from Settings.
+        super::managed_files_with_ext(&self.base_dir().join("commands"), "md").collect()
+    }
+
+    fn subagent_dir_for(&self, scope: &crate::models::ConfigScope) -> Option<PathBuf> {
+        match scope {
+            crate::models::ConfigScope::Global => Some(self.base_dir().join("agents")),
+            crate::models::ConfigScope::Project { path, .. } => {
+                Some(Path::new(path).join(".claude/agents"))
+            }
+        }
+    }
+
+    fn command_dir_for(&self, scope: &crate::models::ConfigScope) -> Option<PathBuf> {
+        match scope {
+            crate::models::ConfigScope::Global => Some(self.base_dir().join("commands")),
+            crate::models::ConfigScope::Project { path, .. } => {
+                Some(Path::new(path).join(".claude/commands"))
+            }
+        }
     }
 
     fn project_markers(&self) -> Vec<ProjectMarker> {
@@ -276,6 +302,14 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn project_subagent_patterns(&self) -> Vec<String> {
         vec![".claude/agents/*.md".into()]
+    }
+
+    fn project_subagent_extension_patterns(&self) -> Vec<String> {
+        self.project_subagent_patterns()
+    }
+
+    fn project_command_patterns(&self) -> Vec<String> {
+        vec![".claude/commands/*.md".into()]
     }
 
     fn project_ignore_patterns(&self) -> Vec<String> {

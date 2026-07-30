@@ -7,6 +7,8 @@ pub mod gemini;
 pub mod hermes;
 pub mod hook_events;
 pub mod kiro;
+pub mod grok;
+pub mod openclaw;
 pub mod opencode;
 pub mod omp;
 pub mod windsurf;
@@ -34,6 +36,27 @@ pub(crate) fn files_with_ext<'a>(
         .flatten() // Result<DirEntry, _> → DirEntry (skip Err)
         .map(|entry| entry.path())
         .filter(move |path| path.extension().is_some_and(|e| e == ext))
+}
+
+/// Return native managed files in both their live (`*.md`) and HarnessKit
+/// disabled (`*.md.disabled`) forms so a rescan preserves disabled inventory.
+pub(crate) fn managed_files_with_ext<'a>(
+    dir: &'a Path,
+    ext: &'a str,
+) -> impl Iterator<Item = PathBuf> + 'a {
+    std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(move |path| {
+            let name = path.file_name().map(|value| value.to_string_lossy());
+            name.is_some_and(|name| {
+                name.ends_with(&format!(".{ext}"))
+                    || name.ends_with(&format!(".{ext}.disabled"))
+            })
+        })
 }
 
 /// Represents an MCP server entry parsed from an agent's config.
@@ -190,6 +213,12 @@ pub trait AgentAdapter: Send + Sync {
         McpFormat::McpServers
     }
 
+    /// Whether this installed Agent version has a verified MCP contract.
+    /// Version-gated adapters opt out until their capability probe passes.
+    fn supports_mcp(&self) -> bool {
+        true
+    }
+
     /// True if HarnessKit should resolve bare commands to absolute paths and
     /// inject `PATH` into the MCP env block when deploying servers to this
     /// agent. Required for agents that don't reliably inherit shell `$PATH`
@@ -268,6 +297,16 @@ pub trait AgentAdapter: Send + Sync {
         vec![]
     }
 
+    /// Subagent files that are promoted into the unified Extension inventory.
+    ///
+    /// This is intentionally separate from `global_subagent_files`: the latter
+    /// feeds the Agents/config-files view and already covers formats that
+    /// HarnessKit can display but cannot yet safely deploy. Adapters opt in
+    /// here only after their native file contract is verified.
+    fn global_subagent_extension_files(&self) -> Vec<PathBuf> {
+        vec![]
+    }
+
     /// Relative paths/globs for rules within a project dir (e.g. "CLAUDE.md")
     fn project_rules_patterns(&self) -> Vec<String> {
         vec![]
@@ -303,6 +342,11 @@ pub trait AgentAdapter: Send + Sync {
         vec![]
     }
 
+    /// Project-scoped subagent patterns eligible for Extension management.
+    fn project_subagent_extension_patterns(&self) -> Vec<String> {
+        vec![]
+    }
+
     /// Relative paths/globs for ignore files within a project dir
     fn project_ignore_patterns(&self) -> Vec<String> {
         vec![]
@@ -315,8 +359,18 @@ pub trait AgentAdapter: Send + Sync {
         vec![]
     }
 
+    /// Command/prompt files eligible for the unified Extension inventory.
+    fn global_command_files(&self) -> Vec<PathBuf> {
+        vec![]
+    }
+
     /// Relative paths/globs for workflow/command files within a project dir.
     fn project_workflow_patterns(&self) -> Vec<String> {
+        vec![]
+    }
+
+    /// Project-scoped command patterns eligible for Extension management.
+    fn project_command_patterns(&self) -> Vec<String> {
         vec![]
     }
 
@@ -419,6 +473,31 @@ pub trait AgentAdapter: Send + Sync {
         }
     }
 
+    /// Resolve the verified native subagent directory for a scope.
+    fn subagent_dir_for(&self, scope: &ConfigScope) -> Option<PathBuf> {
+        let files_or_patterns = match scope {
+            ConfigScope::Global => self.global_subagent_extension_files(),
+            ConfigScope::Project { path, .. } => {
+                return pick_parent_from_patterns(
+                    Path::new(path),
+                    self.project_subagent_extension_patterns(),
+                );
+            }
+        };
+        unique_parent(files_or_patterns)
+    }
+
+    /// Resolve the verified native command directory for a scope.
+    fn command_dir_for(&self, scope: &ConfigScope) -> Option<PathBuf> {
+        let files_or_patterns = match scope {
+            ConfigScope::Global => self.global_command_files(),
+            ConfigScope::Project { path, .. } => {
+                return pick_parent_from_patterns(Path::new(path), self.project_command_patterns());
+            }
+        };
+        unique_parent(files_or_patterns)
+    }
+
     /// Resolve a category-specific skill directory for agents that organise
     /// skills into named subdirectories (e.g. Hermes: `~/.hermes/skills/{category}/`).
     /// Returns `None` for agents with a flat skill layout, letting callers fall
@@ -448,6 +527,8 @@ impl crate::models::AgentCapabilities {
                 // A CLI install deploys the companion skill into the skill
                 // dir (the binary itself is global), so CLI follows skill.
                 cli: skill,
+                subagent: !a.project_subagent_extension_patterns().is_empty(),
+                command: !a.project_command_patterns().is_empty(),
             },
             hooks_supported: a.hook_format() != HookFormat::None,
             global_hook_install: a.supports_global_hook_install(),
@@ -461,6 +542,31 @@ fn pick_unique_concrete(patterns: Vec<String>) -> Option<String> {
         .filter(|p| !p.contains('*') && !p.ends_with('/'));
     let first = concrete.next()?;
     if concrete.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn unique_parent(files: Vec<PathBuf>) -> Option<PathBuf> {
+    let mut parents = files
+        .into_iter()
+        .filter_map(|path| path.parent().map(Path::to_path_buf));
+    let first = parents.next()?;
+    if parents.any(|parent| parent != first) {
+        return None;
+    }
+    Some(first)
+}
+
+fn pick_parent_from_patterns(root: &Path, patterns: Vec<String>) -> Option<PathBuf> {
+    let mut parents = patterns.into_iter().filter_map(|pattern| {
+        let path = Path::new(&pattern);
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| root.join(parent))
+    });
+    let first = parents.next()?;
+    if parents.any(|parent| parent != first) {
         return None;
     }
     Some(first)
@@ -481,6 +587,8 @@ pub fn all_adapters() -> Vec<Box<dyn AgentAdapter>> {
         Box::new(hermes::HermesAdapter::new()),
         Box::new(kiro::KiroAdapter::new()),
         Box::new(omp::OmpAdapter::new()),
+        Box::new(openclaw::OpenClawAdapter::new()),
+        Box::new(grok::GrokAdapter::new()),
     ]
 }
 
@@ -489,9 +597,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_all_adapters_returns_eleven() {
+    fn test_all_adapters_returns_thirteen() {
         let adapters = all_adapters();
-        assert_eq!(adapters.len(), 11);
+        assert_eq!(adapters.len(), 13);
         let names: Vec<&str> = adapters.iter().map(|a| a.name()).collect();
         assert!(names.contains(&"claude"));
         assert!(names.contains(&"cursor"));
@@ -504,6 +612,8 @@ mod tests {
         assert!(names.contains(&"hermes"));
         assert!(names.contains(&"kiro"));
         assert!(names.contains(&"omp"));
+        assert!(names.contains(&"openclaw"));
+        assert!(names.contains(&"grok"));
     }
 
     #[test]
@@ -524,7 +634,17 @@ mod tests {
         // unnecessarily rewrite users' mcp_config.json with absolute paths,
         // hurting cross-machine portability.
         for name in [
-            "claude", "codex", "gemini", "cursor", "copilot", "opencode", "hermes", "kiro", "omp",
+            "claude",
+            "codex",
+            "gemini",
+            "cursor",
+            "copilot",
+            "opencode",
+            "hermes",
+            "kiro",
+            "omp",
+            "openclaw",
+            "grok",
         ] {
             assert!(
                 !by_name[name].needs_path_injection(),
@@ -587,6 +707,8 @@ mod tests {
             ("kiro", true, true, true, true, false),     // kirodotdev/Kiro#5440
             ("omp", true, true, false, false, true),     // hooks are JS/TS modules
             ("hermes", false, false, false, true, true), // global-only (hermes-agent#4667)
+            ("openclaw", false, false, false, false, true), // verified global skills only
+            ("grok", false, false, false, false, true), // verified global capabilities only
         ];
 
         let adapters = all_adapters();
@@ -691,8 +813,8 @@ mod tests {
         // skill concept, drop it from this assertion explicitly.
         let adapters = all_adapters();
         for a in &adapters {
-            if a.name() == "hermes" {
-                continue; // global-only: no project skills (hermes-agent#4667)
+            if matches!(a.name(), "hermes" | "openclaw" | "grok") {
+                continue; // verified global-only adapters
             }
             assert!(
                 !a.project_skill_dirs().is_empty(),
@@ -718,13 +840,13 @@ mod tests {
             ("opencode", ".opencode/skills"),
             ("kiro", ".kiro/skills"),
             ("omp", ".omp/skills"),
-            // hermes is global-only — no project skill dir (hermes-agent#4667).
+            // Global-only adapters intentionally have no project skill dir.
         ]
         .into_iter()
         .collect();
         for a in &adapters {
-            if a.name() == "hermes" {
-                continue; // global-only: no project skills (hermes-agent#4667)
+            if matches!(a.name(), "hermes" | "openclaw" | "grok") {
+                continue;
             }
             let actual = a.project_skill_dirs().into_iter().next().unwrap();
             let want = expected.get(a.name()).expect("adapter not in expected map");

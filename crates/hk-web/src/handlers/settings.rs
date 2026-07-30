@@ -23,6 +23,8 @@ pub async fn get_dashboard_stats(
             plugin_count: exts.iter().filter(|e| e.kind == hk_core::models::ExtensionKind::Plugin).count(),
             hook_count: exts.iter().filter(|e| e.kind == hk_core::models::ExtensionKind::Hook).count(),
             cli_count: exts.iter().filter(|e| e.kind == hk_core::models::ExtensionKind::Cli).count(),
+            subagent_count: exts.iter().filter(|e| e.kind == hk_core::models::ExtensionKind::Subagent).count(),
+            command_count: exts.iter().filter(|e| e.kind == hk_core::models::ExtensionKind::Command).count(),
             critical_issues: severity_map.get("critical").copied().unwrap_or(0),
             high_issues: severity_map.get("high").copied().unwrap_or(0),
             medium_issues: severity_map.get("medium").copied().unwrap_or(0),

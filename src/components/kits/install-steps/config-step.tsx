@@ -2,7 +2,7 @@ import { clsx } from "clsx";
 import type { TFunction } from "i18next";
 import { Check, FolderSearch } from "lucide-react";
 import { useMemo, useState } from "react";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import { isDesktop } from "@/lib/transport";
 import { type AgentInfo, agentDisplayName, type Project } from "@/lib/types";
 import { isWeb as web, webSelectStyle } from "@/lib/web-select";
@@ -178,7 +178,7 @@ export function ConfigStep({
                     : "border-border bg-primary/10 text-foreground hover:bg-primary/20 hover:border-ring",
                 )}
               >
-                <AgentMascot name={a.name} size={14} />
+                <AgentBadge name={a.name} size={14} />
                 <span>{agentDisplayName(a.name)}</span>
                 {sel && <Check size={12} className="shrink-0 text-primary" />}
               </button>

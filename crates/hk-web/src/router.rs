@@ -152,15 +152,21 @@ pub fn build_router(state: WebState) -> Router {
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers(Any);
 
-    // Layer order matters: Axum applies layers inside-out.
-    // Auth must be INNER (applied first), CORS must be OUTER (applied last)
-    // so that OPTIONS preflight requests get CORS headers without hitting auth.
-    Router::new()
+    // Authenticated/supervised daemons are same-origin behind their host
+    // boundary and must not advertise wildcard cross-origin access. Preserve
+    // the legacy permissive layer only for explicit `--no-token` standalone
+    // mode.
+    let auth_enabled = state.token.is_some();
+    let router = Router::new()
         .merge(api)
         .fallback(serve_frontend)
-        .layer(middleware::from_fn_with_state(state.clone(), require_token))
-        .layer(cors)
-        .with_state(state)
+        .layer(middleware::from_fn_with_state(state.clone(), require_token));
+    let router = if auth_enabled {
+        router
+    } else {
+        router.layer(cors)
+    };
+    router.with_state(state)
 }
 
 async fn health() -> Html<&'static str> {

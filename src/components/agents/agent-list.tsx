@@ -20,7 +20,7 @@ import { clsx } from "clsx";
 import { GripVertical } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import type { AgentDetail } from "@/lib/types";
 import { agentDisplayName } from "@/lib/types";
 import { useAgentConfigStore } from "@/stores/agent-config-store";
@@ -76,7 +76,7 @@ function SortableAgentItem({
         disabled={!agent.detected}
         className="flex items-center gap-2 flex-1 py-2.5 pr-3 text-left"
       >
-        <AgentMascot name={agent.name} size={18} />
+        <AgentBadge name={agent.name} size={18} />
         <div className="min-w-0">
           <span className="block text-[13px] font-medium">
             {agentDisplayName(agent.name)}

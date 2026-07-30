@@ -14,6 +14,8 @@ type Result<T> = std::result::Result<Json<T>, ApiError>;
 pub struct ListParams {
     pub kind: Option<String>,
     pub agent: Option<String>,
+    pub scope_type: Option<String>,
+    pub scope_path: Option<String>,
 }
 
 pub async fn list_extensions(
@@ -23,7 +25,24 @@ pub async fn list_extensions(
     blocking(move || {
         let store = state.store.lock();
         let kind = params.kind.as_deref().and_then(|s| s.parse::<ExtensionKind>().ok());
-        store.list_extensions(kind, params.agent.as_deref())
+        if let Some(scope_type) = params.scope_type.as_deref()
+            && !matches!(scope_type, "global" | "project")
+        {
+            return Err(hk_core::HkError::Validation(
+                "scope_type must be 'global' or 'project'".into(),
+            ));
+        }
+        if params.scope_path.is_some() && params.scope_type.as_deref() != Some("project") {
+            return Err(hk_core::HkError::Validation(
+                "scope_path requires scope_type='project'".into(),
+            ));
+        }
+        store.list_extensions_scoped(
+            kind,
+            params.agent.as_deref(),
+            params.scope_type.as_deref(),
+            params.scope_path.as_deref(),
+        )
     }).await
 }
 
@@ -94,11 +113,18 @@ pub async fn scan_and_sync(
 
     // Phase 1+2: Scan filesystem and sync to DB
     let (count, unlinked) = tokio::task::spawn_blocking(move || {
-        let store = state.store.lock();
-        let projects = store.list_project_tuples();
+        // Only read the small project snapshot while holding the DB mutex.
+        // Filesystem traversal can block on large or network-mounted trees and
+        // must not prevent inventory/detail requests from reading SQLite.
+        let projects = {
+            let store = state.store.lock();
+            store.list_project_tuples()
+        };
         let extensions = scanner::scan_all(&state.adapters, &projects);
         let count = extensions.len();
 
+        // Reacquire only for the short SQLite read/sync transaction.
+        let store = state.store.lock();
         let pre_ids: std::collections::HashSet<String> = store
             .list_extensions(Some(ExtensionKind::Skill), None)
             .unwrap_or_default()

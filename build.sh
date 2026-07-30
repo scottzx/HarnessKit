@@ -15,7 +15,7 @@ else
 fi
 
 # Clean extended attributes (prevents codesign issues on APFS/iCloud volumes)
-xattr -cr crates/hk-desktop/icons/ public/icons/ 2>/dev/null || true
+xattr -cr crates/hk-desktop/icons/ 2>/dev/null || true
 
 # Build for Apple Silicon
 echo "==> [1/2] Building for Apple Silicon (aarch64)..."

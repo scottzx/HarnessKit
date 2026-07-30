@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { annotate } from "rough-notation";
-import { AgentMascot } from "@/components/shared/agent-mascot/agent-mascot";
+import { AgentBadge } from "@/components/shared/agent-badge";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { AGENT_ORDER, agentDisplayName } from "@/lib/types";
 
@@ -354,7 +354,7 @@ function StepWelcome() {
                     : "none",
                 }}
               >
-                <AgentMascot name={name} size={52} />
+                <AgentBadge name={name} size={52} />
               </div>
             );
           })}
@@ -745,7 +745,7 @@ function MockExtRow({
       <td className="py-1.5">
         <div className="flex justify-center gap-1">
           {ext.agents.map((a) => (
-            <AgentMascot key={a} name={a} size={14} />
+            <AgentBadge key={a} name={a} size={14} />
           ))}
         </div>
       </td>
@@ -909,7 +909,7 @@ function MockAgentFilesPreview() {
                     : "transparent",
               }}
             >
-              <AgentMascot name={id} size={14} />
+              <AgentBadge name={id} size={14} />
               <span className="text-[9px] text-muted-foreground/50 whitespace-nowrap">
                 {agentDisplayName(id)}
               </span>
@@ -1471,7 +1471,7 @@ function MockMarketplacePreview() {
                       "color-mix(in oklch, var(--border) 50%, transparent)",
                   }}
                 >
-                  <AgentMascot name={id} size={10} />
+                  <AgentBadge name={id} size={10} />
                   <span className="text-[7px] text-foreground/50">
                     {agentDisplayName(id)}
                   </span>
