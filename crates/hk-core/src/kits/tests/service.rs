@@ -1134,6 +1134,7 @@ fn make_skill_ext(
         cli_meta: None,
         install_meta: None,
         scope: ConfigScope::Global,
+        mcp_transport: None,
     }
 }
 
@@ -1316,6 +1317,7 @@ fn insert_kit_asset(
         cli_meta: None,
         install_meta: None,
         scope: ConfigScope::Global,
+        mcp_transport: None,
     };
     let g = store.lock();
     g.insert_extension(&ext).unwrap();
@@ -1429,6 +1431,7 @@ fn mcp_server_entry_serde_round_trip() {
         args: vec!["server.js".to_string()],
         env,
         enabled: true,
+        ..Default::default()
     };
 
     // Canonical Kit blob omits name/enabled — install side supplies name from
