@@ -74,6 +74,9 @@ impl GrokAdapter {
                     command,
                     args,
                     env,
+                    transport: Default::default(),
+                    url: None,
+                    headers: Default::default(),
                     enabled: true,
                 })
             })

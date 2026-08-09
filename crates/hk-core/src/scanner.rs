@@ -1075,6 +1075,7 @@ fn scan_managed_files(
                 cli_meta: None,
                 install_meta: None,
                 scope: scope.clone(),
+                mcp_transport: None,
             })
         })
         .collect()

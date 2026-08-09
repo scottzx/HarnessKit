@@ -833,7 +833,6 @@ mod tests {
 
     #[test]
     fn test_all_adapters_returns_eleven() {
->>>>>>> upstream/main
         let adapters = all_adapters();
         assert_eq!(adapters.len(), 13);
         let names: Vec<&str> = adapters.iter().map(|a| a.name()).collect();

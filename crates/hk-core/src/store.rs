@@ -126,9 +126,6 @@ fn scope_columns(scope: &ConfigScope) -> (&'static str, Option<&str>) {
         ConfigScope::Project { path, .. } => ("project", Some(path.as_str())),
     }
 }
-=======
-       mcp_transport = excluded.mcp_transport";
->>>>>>> upstream/main
 
 pub struct Store {
     conn: Connection,
@@ -1060,10 +1057,10 @@ impl Store {
         // carry install_meta from a marketplace install). Self-heal here so
         // upgrading users don't have to manually clear them.
         tx.execute(
-            "DELETE FROM extensions \
-             WHERE json_extract(scope_json, '$.type') = 'project' \
-               AND json_extract(scope_json, '$.path') NOT IN \
-                   (SELECT path FROM projects)",
+            r#"DELETE FROM extensions
+               WHERE json_extract(scope_json, '$.type') = 'project'
+                 AND json_extract(scope_json, '$.path') NOT IN
+                     (SELECT path FROM projects)"#,
             [],
         )?;
 
