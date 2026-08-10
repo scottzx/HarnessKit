@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use comfy_table::{ContentArrangement, Table, presets::UTF8_FULL_CONDENSED};
-use hk_core::{adapter, manager, models::*, scanner, service, store::Store};
+use hk_core::{adapter, manager, marketplace, models::*, scanner, service, store::Store};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -48,6 +48,20 @@ enum Commands {
         /// Extension name
         name: String,
         /// Print extension details as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search the marketplace for installable skills, MCP servers, or CLIs
+    Search {
+        /// Search text (2+ chars; optional for --kind cli to list everything)
+        query: Option<String>,
+        /// What to search: skill (default), mcp, cli
+        #[arg(long, default_value = "skill")]
+        kind: String,
+        /// Maximum number of results
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Print results as JSON
         #[arg(long)]
         json: bool,
     },
@@ -136,6 +150,16 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Commands::Search {
+        query,
+        kind,
+        limit,
+        json,
+    } = cli.command
+    {
+        return cmd_search(query.as_deref(), &kind, limit, json);
+    }
+
     std::fs::create_dir_all(&data_dir)?;
     let store = Store::open(&data_dir.join("metadata.db"))?;
     let adapters = adapter::all_adapters();
@@ -190,6 +214,7 @@ fn main() -> Result<()> {
         Commands::Disable { name, pack } => {
             cmd_toggle(&store, &extensions, name.as_deref(), pack.as_deref(), false)
         }
+        Commands::Search { .. } => unreachable!("handled above"),
         Commands::Serve { .. } => unreachable!("handled above"),
     }
 }
@@ -835,6 +860,147 @@ fn cmd_toggle(
     Ok(())
 }
 
+#[derive(Serialize)]
+struct SearchJsonOutput {
+    schema_version: u8,
+    command: &'static str,
+    kind: String,
+    query: Option<String>,
+    limit: usize,
+    count: usize,
+    rows: Vec<marketplace::MarketplaceItem>,
+}
+
+fn cmd_search(query: Option<&str>, kind: &str, limit: usize, json: bool) -> Result<()> {
+    let items = match kind {
+        "mcp" => {
+            let q = query.map(str::trim).unwrap_or("");
+            if q.len() < 2 {
+                return Err(anyhow::anyhow!(
+                    "Search query required (2+ characters) for --kind mcp"
+                ));
+            }
+            marketplace::search_servers(q, limit)?
+        }
+        "cli" => {
+            let mut items = filter_cli_items(marketplace::list_cli_registry(), query);
+            items.truncate(limit);
+            items
+        }
+        _ => {
+            let q = query.map(str::trim).unwrap_or("");
+            if q.len() < 2 {
+                return Err(anyhow::anyhow!(
+                    "Search query required (2+ characters) for --kind skill"
+                ));
+            }
+            marketplace::search_skills(q, limit)?
+        }
+    };
+
+    if json {
+        let output = build_search_json_output(kind, query, limit, items);
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    print_search_table(&items);
+    Ok(())
+}
+
+fn build_search_json_output(
+    kind: &str,
+    query: Option<&str>,
+    limit: usize,
+    items: Vec<marketplace::MarketplaceItem>,
+) -> SearchJsonOutput {
+    SearchJsonOutput {
+        schema_version: 1,
+        command: "search",
+        kind: kind.to_string(),
+        query: query.map(|q| q.to_string()),
+        limit,
+        count: items.len(),
+        rows: items,
+    }
+}
+
+/// Filter CLI registry items by a case-insensitive substring across the
+/// binary id, display name, repo source, description, and categories.
+/// A missing or blank query returns everything (the full registry listing).
+fn filter_cli_items(
+    items: Vec<marketplace::MarketplaceItem>,
+    query: Option<&str>,
+) -> Vec<marketplace::MarketplaceItem> {
+    let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) else {
+        return items;
+    };
+    let q = q.to_lowercase();
+    items
+        .into_iter()
+        .filter(|item| {
+            item.id.to_lowercase().contains(&q)
+                || item.name.to_lowercase().contains(&q)
+                || item.source.to_lowercase().contains(&q)
+                || item.description.to_lowercase().contains(&q)
+                || item
+                    .categories
+                    .iter()
+                    .any(|c| c.to_lowercase().contains(&q))
+        })
+        .collect()
+}
+
+/// Clip a string to `max` characters at a UTF-8 boundary, appending "…".
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}…")
+}
+
+fn print_search_table(items: &[marketplace::MarketplaceItem]) {
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table.set_header(vec![
+        "Name", "Kind", "Source", "Installs", "Stars", "Verified", "Description",
+    ]);
+
+    for item in items {
+        let verified = if item.verified {
+            "yes".green().to_string()
+        } else {
+            "no".red().to_string()
+        };
+        let stars = item
+            .stars
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "—".dimmed().to_string());
+        let description = if item.description.is_empty() {
+            "—".dimmed().to_string()
+        } else {
+            clip(&item.description, 60)
+        };
+        table.add_row(vec![
+            &item.name,
+            &item.kind,
+            &item.source,
+            &item.installs.to_string(),
+            &stars,
+            &verified,
+            &description,
+        ]);
+    }
+    println!(
+        "\n  {} {}",
+        items.len().to_string().bold(),
+        "results".dimmed()
+    );
+    println!("{table}");
+}
+
 fn format_score(score: u8) -> String {
     let tier = TrustTier::from_score(score);
     match tier {
@@ -1144,6 +1310,137 @@ mod cli_json_tests {
         ext.kind = ExtensionKind::Mcp;
 
         assert_eq!(update_reason(&ext), "not_skill");
+    }
+
+    // --- Search ---
+
+    fn market_item(id: &str, name: &str) -> marketplace::MarketplaceItem {
+        marketplace::MarketplaceItem {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: String::new(),
+            source: "acme/tools".into(),
+            skill_id: String::new(),
+            kind: "cli".into(),
+            installs: 0,
+            icon_url: None,
+            verified: false,
+            categories: vec![],
+            stars: None,
+            repo_url: None,
+        }
+    }
+
+    #[test]
+    fn parse_search_flags() {
+        let cli = Cli::try_parse_from([
+            "hk", "search", "git", "--kind", "cli", "--limit", "5", "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Search {
+                query,
+                kind,
+                limit,
+                json,
+            } => {
+                assert_eq!(query.as_deref(), Some("git"));
+                assert_eq!(kind, "cli");
+                assert_eq!(limit, 5);
+                assert!(json);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn parse_search_defaults_to_skill_kind() {
+        let cli = Cli::try_parse_from(["hk", "search", "git"]).unwrap();
+
+        match cli.command {
+            Commands::Search {
+                query,
+                kind,
+                limit,
+                json,
+            } => {
+                assert_eq!(query.as_deref(), Some("git"));
+                assert_eq!(kind, "skill");
+                assert_eq!(limit, 10);
+                assert!(!json);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn filter_cli_items_matches_name_case_insensitive() {
+        let items = vec![
+            market_item("cli:lark-cli", "Lark / Feishu CLI"),
+            market_item("cli:rtk", "RTK"),
+        ];
+
+        let matched = filter_cli_items(items, Some("lark"));
+
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].name, "Lark / Feishu CLI");
+    }
+
+    #[test]
+    fn filter_cli_items_matches_description() {
+        let mut item = market_item("cli:rtk", "RTK");
+        item.description = "CLI proxy that filters command output".into();
+
+        let matched = filter_cli_items(vec![item], Some("proxy"));
+
+        assert_eq!(matched.len(), 1);
+    }
+
+    #[test]
+    fn filter_cli_items_blank_query_returns_all() {
+        let items = vec![market_item("cli:a", "A"), market_item("cli:b", "B")];
+
+        assert_eq!(filter_cli_items(items.clone(), None).len(), 2);
+        assert_eq!(filter_cli_items(items.clone(), Some("  ")).len(), 2);
+    }
+
+    #[test]
+    fn filter_cli_items_no_match_returns_empty() {
+        let items = vec![market_item("cli:rtk", "RTK")];
+
+        assert!(filter_cli_items(items, Some("notion")).is_empty());
+    }
+
+    #[test]
+    fn search_json_output_schema() {
+        let mut item = market_item("cli:rtk", "RTK");
+        item.description = "Token-optimizing CLI proxy".into();
+        item.stars = Some(1234);
+
+        let output = build_search_json_output("cli", Some("rtk"), 10, vec![item]);
+        let value = as_value(&output);
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["command"], "search");
+        assert_eq!(value["kind"], "cli");
+        assert_eq!(value["query"], "rtk");
+        assert_eq!(value["limit"], 10);
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["rows"][0]["name"], "RTK");
+        assert_eq!(value["rows"][0]["stars"], 1234);
+    }
+
+    #[test]
+    fn clip_keeps_short_and_truncates_long_at_char_boundary() {
+        assert_eq!(clip("hello", 10), "hello");
+
+        let clipped = clip("a very long description here", 8);
+        assert!(clipped.ends_with('…'));
+        assert!(clipped.chars().count() <= 8);
+
+        // Multi-byte input must not panic or split a codepoint.
+        let _ = clip("🚀🚀🚀🚀🚀🚀", 4);
     }
 }
 
