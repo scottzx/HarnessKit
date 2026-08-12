@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::models::*;
 
 /// Latest schema version supported by this binary.
-const LATEST_SCHEMA_VERSION: i64 = 9;
+const LATEST_SCHEMA_VERSION: i64 = 10;
 
 /// One row of `custom_config_paths`: (id, path, label, category, scope_json).
 /// `scope_json` is `None` for legacy rows that predate v4 schema migration.
@@ -219,6 +219,7 @@ impl Store {
         if current_version < 7 { self.migrate_v7()?; }
         if current_version < 8 { self.migrate_v8()?; }
         if current_version < 9 { self.migrate_v9()?; }
+        if current_version < 10 { self.migrate_v10()?; }
 
         // Update schema version to latest
         if current_version < LATEST_SCHEMA_VERSION {
@@ -440,6 +441,14 @@ impl Store {
              CREATE INDEX IF NOT EXISTS idx_extensions_kind_scope
                 ON extensions(kind, scope_type, scope_path);",
         )?;
+        Ok(())
+    }
+
+    /// Schema v10: heal DBs that reached v9 before `mcp_transport` was part of
+    /// migrate_v9 (intermediate fork builds marked version=9 after only adding
+    /// scope columns). Idempotent via migrate_add_column.
+    fn migrate_v10(&self) -> Result<(), HkError> {
+        self.migrate_add_column("ALTER TABLE extensions ADD COLUMN mcp_transport TEXT");
         Ok(())
     }
 

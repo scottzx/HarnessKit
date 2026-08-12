@@ -149,8 +149,23 @@ export function createHttpTransport(options: HttpTransportOptions): Transport {
   };
 }
 
+/**
+ * Resolve the standalone SPA API base.
+ * - Standalone `hk serve` / Tauri: `/api`
+ * - 1agents iframe under `/api/harnesskit/`: `/api/harnesskit`
+ * Embed custom elements pass api-base explicitly and do not use this.
+ */
+function resolveStandaloneApiBase(): string {
+  if (typeof window === "undefined") return "/api";
+  const path = window.location.pathname || "";
+  if (path === "/api/harnesskit" || path.startsWith("/api/harnesskit/")) {
+    return "/api/harnesskit";
+  }
+  return "/api";
+}
+
 const standaloneHttpTransport = createHttpTransport({
-  apiBase: "/api",
+  apiBase: resolveStandaloneApiBase(),
   getAuthToken,
 });
 

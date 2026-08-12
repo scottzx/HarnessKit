@@ -7,6 +7,11 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(({ mode }) => {
   return {
+    // Relative asset URLs so the SPA works both at `/` (standalone / Tauri)
+    // and under reverse-proxy prefixes like `/api/harnesskit/` (1agents embed).
+    // Absolute `/assets/…` paths break under a subpath because the browser
+    // resolves them against the host root, not the iframe base.
+    base: "./",
     plugins: [react(), tailwindcss()],
     define: {
       "process.env": {},
