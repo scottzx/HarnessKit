@@ -19,3 +19,8 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+
+[profile.dev]
+# Smaller debug artifacts while keeping usable backtraces / incremental rebuilds.
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
